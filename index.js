@@ -1,10 +1,12 @@
 const { program } = require('commander');
+const fs = require('fs');
 
 const cache = require('./src/cache');
 const ripper = require('./src/ripperV2');
 const importer = require('./src/importerV2');
 const reverter = require('./src/reverter');
 const builder = require('./src/builder');
+const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
 
 program
     .name('choops-extractor')
@@ -28,6 +30,29 @@ program.command('rip')
     .option('--game-name <gameName>', 'Specify which game you are ripping (valid values are: choops2k8, nba2k8, nba2k9)')
     .action(async (inputPath, outputPath, options) => {
         await ripper(inputPath, outputPath, options);
+    });
+
+program.command('probe')
+    .description('Probe an IFF/CDF for alternate compression layouts and embedded zlib streams.')
+    .argument('<file>', 'Path to IFF or CDF file')
+    .action(async (file) => {
+        const buf = fs.readFileSync(file);
+        const results = probeUtil.scanBuffer(buf);
+
+        console.log(`Compression probe results for ${file}`);
+
+        if (results.length <= 0) {
+            console.log('No candidate compressed streams detected.');
+            return;
+        }
+
+        results.forEach((result, index) => {
+            console.log(
+                `[${index}] algorithm=${result.algorithm} label=${result.label} `
+                + `offset=0x${result.absoluteOffset.toString(16)} `
+                + `size=0x${result.data.length.toString(16)}`
+            );
+        });
     });
 
 program.command('build-cache')
