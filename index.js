@@ -7,6 +7,7 @@ const importer = require('./src/importerV2');
 const reverter = require('./src/reverter');
 const builder = require('./src/builder');
 const assetExtractor = require('./src/assetExtractor');
+const cdfDecompressor = require('./src/cdfDecompressor');
 const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
 
 program
@@ -48,6 +49,16 @@ program.command('extract-assets')
     .option('--game-name <gameName>', 'Specify which game you are ripping (valid values are: choops2k8, nba2k8, nba2k9)')
     .action(async (inputPath, outputPath, options) => {
         await assetExtractor(inputPath, outputPath, options);
+    });
+
+program.command('decompress-cdf')
+    .description('Heuristically decompress and split a CDF container into candidate database/roster chunks.')
+    .argument('<cdf file>', 'Path to CDF file')
+    .argument('<output path>', 'Path to output decompressed chunks')
+    .option('--max-hits <number>', 'Maximum decompressed streams to dump')
+    .option('--dump-table-chunks', 'Attempt offset-table chunk splitting and decompression')
+    .action(async (cdfFile, outputPath, options) => {
+        await cdfDecompressor.decompressCdfFile(cdfFile, outputPath, options);
     });
 
 program.command('probe')
