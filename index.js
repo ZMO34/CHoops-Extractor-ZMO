@@ -6,6 +6,7 @@ const ripper = require('./src/ripperV2');
 const importer = require('./src/importerV2');
 const reverter = require('./src/reverter');
 const builder = require('./src/builder');
+const assetExtractor = require('./src/assetExtractor');
 const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
 
 program
@@ -30,6 +31,23 @@ program.command('rip')
     .option('--game-name <gameName>', 'Specify which game you are ripping (valid values are: choops2k8, nba2k8, nba2k9)')
     .action(async (inputPath, outputPath, options) => {
         await ripper(inputPath, outputPath, options);
+    });
+
+program.command('extract-assets')
+    .description('Extract model, database, roster, and animation candidate payloads from IFF/CDF containers.')
+    .argument('<path to game files>', 'Path to Choops game files directory (must include USRDIR in path)')
+    .argument('<output path>', 'Path to output extracted assets')
+    .option('-c, --cache', 'Force cache rebuild')
+    .option('-i, --index <number>', 'IFF/CDF file to scan (by index)')
+    .option('-f, --file <string>', 'IFF/CDF file to scan (by exact name)')
+    .option('--category <categories...>', 'Asset categories to extract: models, database, rosters, animations')
+    .option('--scan-all', 'Scan all files regardless of heuristics')
+    .option('--dump-top-level-raw', 'Always dump raw top-level container data')
+    .option('--include-all-unknown', 'Include assets even when category classification is unknown')
+    .option('--max-probe-hits <number>', 'Maximum embedded compressed streams to dump from a container')
+    .option('--game-name <gameName>', 'Specify which game you are ripping (valid values are: choops2k8, nba2k8, nba2k9)')
+    .action(async (inputPath, outputPath, options) => {
+        await assetExtractor(inputPath, outputPath, options);
     });
 
 program.command('probe')
