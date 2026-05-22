@@ -7,6 +7,8 @@ const PACKAGE_HEADER_SIZE = 0x54;
 const TEXTURE_HEADER_SIZE = 0xB0;
 const MODEL_PART_RECORD_SIZE = 0xB0;
 const MODEL_PART_FIELD_COUNT = MODEL_PART_RECORD_SIZE / 4;
+const VERTEX_DESCRIPTOR_U32_COUNT = 7;
+const VERTEX_ATTRIBUTE_RECORD_SIZE = 0x40;
 
 const MODEL_PART_FIELD_MAP = [
     'renderObjectOffsetPlusOne',
@@ -55,20 +57,26 @@ const MODEL_PART_FIELD_MAP = [
     'indexBufferDataOffsetPlusOne'
 ];
 
+const VERTEX_USAGE_NAMES = {
+    0x00: 'POSITION',
+    0x03: 'COLOR_OR_NORMAL_TANGENT',
+    0x08: 'TEXCOORD0_UV',
+    0x09: 'TEXCOORD1_UV_OR_LIGHTMAP'
+};
+
+const VERTEX_FORMAT_NAMES = {
+    0x01: 'unknown_or_packed',
+    0x02: 'float32',
+    0x03: 'half_float_or_packed_u16',
+    0x04: 'packed_color_or_packed_normal'
+};
+
 function readUInt32Safe(buf, offset) {
     if (!buf || offset < 0 || offset + 4 > buf.length) {
         return null;
     }
 
     return buf.readUInt32BE(offset);
-}
-
-function readFloat32Safe(buf, offset) {
-    if (!buf || offset < 0 || offset + 4 > buf.length) {
-        return null;
-    }
-
-    return buf.readFloatBE(offset);
 }
 
 function firstBytesHex(buf, length = 16) {
@@ -85,6 +93,16 @@ function toHex32(value) {
 
 function oneBasedOffset(value) {
     return value > 0 ? value - 1 : null;
+}
+
+function align(value, alignment) {
+    return Math.ceil(value / alignment) * alignment;
+}
+
+function readFloat32FromUInt32(value) {
+    const buf = Buffer.alloc(4);
+    buf.writeUInt32BE(value >>> 0, 0);
+    return buf.readFloatBE(0);
 }
 
 function unwrapToolWrapper(buf) {
@@ -153,12 +171,6 @@ function decodeModelPartFields(fields) {
     };
 }
 
-function readFloat32FromUInt32(value) {
-    const buf = Buffer.alloc(4);
-    buf.writeUInt32BE(value >>> 0, 0);
-    return buf.readFloatBE(0);
-}
-
 function readIndexPreview(dataBlock, offset, count, maxValues = 32) {
     if (offset === null || offset < 0 || offset >= dataBlock.length || count <= 0) {
         return [];
@@ -171,6 +183,204 @@ function readIndexPreview(dataBlock, offset, count, maxValues = 32) {
     }
 
     return values;
+}
+
+function readMaxIndex(dataBlock, offset, count) {
+    if (offset === null || offset < 0 || offset >= dataBlock.length || count <= 0) {
+        return null;
+    }
+
+    let maxIndex = 0;
+    const limit = Math.min(count, Math.floor((dataBlock.length - offset) / 2));
+    for (let i = 0; i < limit; i++) {
+        const value = dataBlock.readUInt16BE(offset + (i * 2));
+        if (value !== 0xFFFF && value > maxIndex) {
+            maxIndex = value;
+        }
+    }
+
+    return maxIndex;
+}
+
+function parseVertexDescriptor(packageBuffer, offset) {
+    if (offset < 0 || offset + (VERTEX_DESCRIPTOR_U32_COUNT * 4) > packageBuffer.length) {
+        return null;
+    }
+
+    const values = [];
+    for (let i = 0; i < VERTEX_DESCRIPTOR_U32_COUNT; i++) {
+        values.push(packageBuffer.readUInt32BE(offset + (i * 4)));
+    }
+
+    const vertexCount = values[0];
+    const streamOrBufferCount = values[1];
+    const attributeCount = values[2];
+    const primitiveOrFlags = values[3];
+    const vertexStride = values[4];
+    const vertexBufferByteLength = values[5];
+    const vertexBufferDataOffset = oneBasedOffset(values[6]);
+
+    if (
+        vertexCount <= 0
+        || vertexCount > 200000
+        || ![0x20, 0x24, 0x18, 0x1C, 0x28, 0x30].includes(vertexStride)
+        || vertexBufferByteLength !== vertexCount * vertexStride
+        || vertexBufferDataOffset === null
+    ) {
+        return null;
+    }
+
+    return {
+        offset,
+        values,
+        vertexCount,
+        streamOrBufferCount,
+        attributeCount,
+        primitiveOrFlags: toHex32(primitiveOrFlags),
+        vertexStride,
+        vertexBufferByteLength,
+        vertexBufferDataOffset,
+        vertexBufferDataOffsetPlusOne: values[6]
+    };
+}
+
+function parseVertexDescriptors(packageBuffer) {
+    const descriptors = [];
+
+    for (let offset = 0; offset + (VERTEX_DESCRIPTOR_U32_COUNT * 4) <= packageBuffer.length; offset += 4) {
+        const descriptor = parseVertexDescriptor(packageBuffer, offset);
+        if (descriptor) {
+            descriptors.push(descriptor);
+        }
+    }
+
+    return descriptors;
+}
+
+function parseVertexAttributeDeclaration(packageBuffer, offset) {
+    if (offset < 0 || offset + 0x10 > packageBuffer.length) {
+        return null;
+    }
+
+    const semanticHashA = packageBuffer.readUInt32BE(offset);
+    const semanticHashB = packageBuffer.readUInt32BE(offset + 4);
+    const strideOffsetPacked = packageBuffer.readUInt32BE(offset + 8);
+    const formatPacked = packageBuffer.readUInt32BE(offset + 12);
+
+    const vertexStride = (strideOffsetPacked >>> 24) & 0xFF;
+    const byteOffset = (strideOffsetPacked >>> 16) & 0xFF;
+    const format = (formatPacked >>> 24) & 0xFF;
+    const componentCount = (formatPacked >>> 16) & 0xFF;
+    const usage = (formatPacked >>> 8) & 0xFF;
+    const usageIndex = formatPacked & 0xFF;
+
+    if (
+        ![0x20, 0x24, 0x18, 0x1C, 0x28, 0x30].includes(vertexStride)
+        || byteOffset >= vertexStride
+        || format <= 0
+        || format > 8
+        || componentCount <= 0
+        || componentCount > 4
+        || usage > 0x20
+    ) {
+        return null;
+    }
+
+    return {
+        offset,
+        recordSize: VERTEX_ATTRIBUTE_RECORD_SIZE,
+        semanticHashA: toHex32(semanticHashA),
+        semanticHashB: toHex32(semanticHashB),
+        strideOffsetPacked: toHex32(strideOffsetPacked),
+        formatPacked: toHex32(formatPacked),
+        vertexStride,
+        byteOffset,
+        format,
+        formatName: VERTEX_FORMAT_NAMES[format] || 'unknown',
+        componentCount,
+        usage,
+        usageName: VERTEX_USAGE_NAMES[usage] || `USAGE_${usage}`,
+        usageIndex
+    };
+}
+
+function parseVertexAttributeDeclarations(packageBuffer) {
+    const declarations = [];
+
+    for (let offset = 0; offset + 0x10 <= packageBuffer.length; offset += 4) {
+        const declaration = parseVertexAttributeDeclaration(packageBuffer, offset);
+        if (declaration) {
+            declarations.push(declaration);
+        }
+    }
+
+    return declarations;
+}
+
+function attachNearestVertexDeclarations(vertexDescriptor, allDeclarations) {
+    // In s000 floor.scne/arena.scne, the attribute records are 0x40-byte records
+    // immediately before each vertex descriptor. Some meshes expose three records
+    // (position/color/uv), others expose four or more (secondary UV/lightmap).
+    return allDeclarations
+        .filter((decl) => {
+            return decl.vertexStride === vertexDescriptor.vertexStride
+                && decl.offset < vertexDescriptor.offset
+                && vertexDescriptor.offset - decl.offset <= 0x180;
+        })
+        .sort((a, b) => a.offset - b.offset);
+}
+
+function readAttributePreview(dataBlock, vertexDescriptor, declaration, maxVertices = 4) {
+    const values = [];
+    const vertexCount = Math.min(vertexDescriptor.vertexCount, maxVertices);
+
+    for (let i = 0; i < vertexCount; i++) {
+        const baseOffset = vertexDescriptor.vertexBufferDataOffset
+            + (i * vertexDescriptor.vertexStride)
+            + declaration.byteOffset;
+
+        if (baseOffset < 0 || baseOffset >= dataBlock.length) {
+            break;
+        }
+
+        const components = [];
+        for (let c = 0; c < declaration.componentCount; c++) {
+            const componentOffset = baseOffset + (c * 4);
+            if (declaration.format === 0x02 && componentOffset + 4 <= dataBlock.length) {
+                components.push(dataBlock.readFloatBE(componentOffset));
+            }
+            else if (declaration.format === 0x03 && baseOffset + (c * 2) + 2 <= dataBlock.length) {
+                components.push(dataBlock.readUInt16BE(baseOffset + (c * 2)));
+            }
+            else if (declaration.format === 0x04 && baseOffset + c < dataBlock.length) {
+                components.push(dataBlock[baseOffset + c]);
+            }
+        }
+        values.push(components);
+    }
+
+    return values;
+}
+
+function findVertexDescriptorForPart(part, vertexDescriptors) {
+    if (!part.indexBuffer || part.indexBuffer.endOffset === null) {
+        return null;
+    }
+
+    const expectedVertexOffset = align(part.indexBuffer.endOffset, 4);
+    const candidates = vertexDescriptors.filter((descriptor) => {
+        return descriptor.vertexBufferDataOffset === expectedVertexOffset;
+    });
+
+    if (candidates.length === 1) {
+        return candidates[0];
+    }
+
+    if (candidates.length > 1 && part.indexBuffer.maxIndex !== null) {
+        return candidates.find((descriptor) => descriptor.vertexCount > part.indexBuffer.maxIndex) || candidates[0];
+    }
+
+    return null;
 }
 
 function parseScnePackage(buf) {
@@ -216,6 +426,18 @@ function parseScnePackage(buf) {
     const dataBlockSize = Math.max(0, packageBuffer.length - dataBlockOffset);
     const dataBlock = unwrapped.blocks.length >= 2 ? unwrapped.blocks[1] : packageBuffer.slice(dataBlockOffset);
 
+    const vertexDeclarations = parseVertexAttributeDeclarations(packageBuffer);
+    const vertexDescriptors = parseVertexDescriptors(packageBuffer).map((descriptor) => {
+        const declarations = attachNearestVertexDeclarations(descriptor, vertexDeclarations);
+        return {
+            ...descriptor,
+            declarations: declarations.map((declaration) => ({
+                ...declaration,
+                preview: readAttributePreview(dataBlock, descriptor, declaration)
+            }))
+        };
+    });
+
     const modelParts = [];
     if (header.numberOfModelParts > 0 && header.modelPartsEnd <= packageBuffer.length) {
         for (let i = 0; i < header.numberOfModelParts; i++) {
@@ -240,7 +462,8 @@ function parseScnePackage(buf) {
                 ? decoded.indexBufferDataOffset + (decoded.indexCountU16 * 2)
                 : null;
 
-            modelParts.push({
+            const maxIndex = readMaxIndex(dataBlock, decoded.indexBufferDataOffset, decoded.indexCountU16);
+            const part = {
                 index: i,
                 recordOffset,
                 recordLength: MODEL_PART_RECORD_SIZE,
@@ -254,10 +477,21 @@ function parseScnePackage(buf) {
                     countU16: decoded.indexCountU16,
                     byteLength: decoded.indexCountU16 * 2,
                     endOffset: indexBufferEnd,
+                    alignedEndOffset: indexBufferEnd !== null ? align(indexBufferEnd, 4) : null,
+                    maxIndex,
+                    inferredVertexCountFromIndices: maxIndex !== null ? maxIndex + 1 : null,
                     formatOrStrideFlags: toHex32(decoded.indexBufferFormatOrStrideFlags),
                     previewU16BE: readIndexPreview(dataBlock, decoded.indexBufferDataOffset, decoded.indexCountU16)
                 }
-            });
+            };
+
+            const vertexDescriptor = findVertexDescriptorForPart(part, vertexDescriptors);
+            if (vertexDescriptor) {
+                part.vertexBuffer = vertexDescriptor;
+                part.uvDeclarations = vertexDescriptor.declarations.filter((decl) => decl.usage === 0x08 || decl.usage === 0x09);
+            }
+
+            modelParts.push(part);
         }
     }
 
@@ -268,6 +502,8 @@ function parseScnePackage(buf) {
         dataBlockOffset,
         dataBlockSize,
         dataBlock,
+        vertexDeclarations,
+        vertexDescriptors,
         modelParts
     };
 }
@@ -289,12 +525,30 @@ async function dumpScneModelCandidates(scneBuffer, outputPath, options = {}) {
         header,
         modelPartRecordSize: MODEL_PART_RECORD_SIZE,
         modelPartFieldMap: MODEL_PART_FIELD_MAP,
+        vertexDescriptorLayout: [
+            'vertexCount',
+            'streamOrBufferCount',
+            'attributeCount',
+            'primitiveOrFlags',
+            'vertexStride',
+            'vertexBufferByteLength',
+            'vertexBufferDataOffsetPlusOne'
+        ],
+        vertexAttributeDeclarationLayout: [
+            'semanticHashA',
+            'semanticHashB',
+            'packed: stride byte / attribute byte offset',
+            'packed: format / component count / usage / usage index'
+        ],
+        vertexDescriptors: parsed.vertexDescriptors,
         modelParts: parsed.modelParts,
         notes: [
             'SCNE model-part records are 0xB0 bytes / 44 BE u32 fields in s000 floor.scne and arena.scne.',
-            'Offsets in the model-part record are 1-based: actual offset = stored value - 1.',
+            'Offsets in model-part records and vertex descriptors are 1-based: actual offset = stored value - 1.',
             'field42/indexCountU16 and field43/indexBufferDataOffsetPlusOne point to the 16-bit BE index buffer in data block 1.',
-            'The current unknowns are the sectionA/B/C/D structures and exact vertex-buffer descriptors.'
+            'The vertex buffer normally starts at align4(indexBufferEnd). Vertex descriptors explicitly confirm this.',
+            'Primary UV declarations use usage 0x08. Secondary UV/lightmap declarations use usage 0x09.',
+            'The packed attribute declaration word stores stride and byte offset; the second packed word stores format/component count/usage/index.'
         ]
     };
 
@@ -337,6 +591,16 @@ async function dumpScneModelCandidates(scneBuffer, outputPath, options = {}) {
             );
         }
 
+        if (part.vertexBuffer && part.vertexBuffer.vertexBufferDataOffset + part.vertexBuffer.vertexBufferByteLength <= parsed.dataBlock.length) {
+            await fs.writeFile(
+                path.join(partDir, 'vertex_buffer.bin'),
+                parsed.dataBlock.slice(
+                    part.vertexBuffer.vertexBufferDataOffset,
+                    part.vertexBuffer.vertexBufferDataOffset + part.vertexBuffer.vertexBufferByteLength
+                )
+            );
+        }
+
         for (const ref of part.headerReferences) {
             const refEnd = Math.min(packageBuffer.length, ref.offset + 0x400);
             await fs.writeFile(
@@ -359,7 +623,11 @@ async function dumpScneModelCandidates(scneBuffer, outputPath, options = {}) {
 
 module.exports = {
     MODEL_PART_FIELD_MAP,
+    VERTEX_USAGE_NAMES,
+    VERTEX_FORMAT_NAMES,
     parseScnePackage,
+    parseVertexDescriptors,
+    parseVertexAttributeDeclarations,
     dumpScneModelCandidates,
     unwrapToolWrapper
 };
