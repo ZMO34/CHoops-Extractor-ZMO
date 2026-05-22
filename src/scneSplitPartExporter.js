@@ -20,23 +20,31 @@ function findDeclaration(vertexBuffer, usage) {
     return vertexBuffer.declarations.find((declaration) => declaration.usage === usage) || null;
 }
 
-function readIndices(dataBlock, indexBuffer) {
+function readIndices(dataBlock, indexBuffer, options = {}) {
     const indices = [];
     if (!indexBuffer || indexBuffer.offset === null || indexBuffer.byteLength <= 0) return indices;
 
-    const limit = Math.min(indexBuffer.countU16, Math.floor((dataBlock.length - indexBuffer.offset) / 2));
+    const startBiasBytes = Number.parseInt(options.indexStartBiasBytes || 0, 10);
+    const offset = indexBuffer.offset + startBiasBytes;
+    if (offset < 0 || offset >= dataBlock.length) return indices;
+
+    const countBias = Number.parseInt(options.indexCountBias || 0, 10);
+    const requestedCount = Math.max(0, indexBuffer.countU16 + countBias);
+    const limit = Math.min(requestedCount, Math.floor((dataBlock.length - offset) / 2));
     for (let i = 0; i < limit; i++) {
-        indices.push(dataBlock.readUInt16BE(indexBuffer.offset + (i * 2)));
+        indices.push(dataBlock.readUInt16BE(offset + (i * 2)));
     }
     return indices;
 }
 
-function buildTriangleStripFaces(indices, hasUV, maxVertexIndex) {
+function buildTriangleStripFaces(indices, hasUV, maxVertexIndex, options = {}) {
     const faces = [];
     let strip = [];
+    const restartValues = new Set([0xFFFF]);
+    if (options.treatZeroAsRestart) restartValues.add(0);
 
     function validIndex(index) {
-        return index !== 0xFFFF && index >= 0 && index <= maxVertexIndex;
+        return !restartValues.has(index) && index >= 0 && index <= maxVertexIndex;
     }
 
     function faceElement(index) {
@@ -50,18 +58,17 @@ function buildTriangleStripFaces(indices, hasUV, maxVertexIndex) {
             const b = strip[i - 1];
             const c = strip[i];
 
-            if (!validIndex(a) || !validIndex(b) || !validIndex(c) || a === b || b === c || a === c) {
-                continue;
-            }
+            if (!validIndex(a) || !validIndex(b) || !validIndex(c) || a === b || b === c || a === c) continue;
 
-            const ordered = (i % 2 === 0) ? [a, b, c] : [b, a, c];
+            let ordered = (i % 2 === 0) ? [a, b, c] : [b, a, c];
+            if (options.reverseWinding) ordered = [ordered[0], ordered[2], ordered[1]];
             faces.push(ordered.map(faceElement));
         }
         strip = [];
     }
 
     for (const index of indices) {
-        if (index === 0xFFFF) flushStrip();
+        if (restartValues.has(index)) flushStrip();
         else strip.push(index);
     }
     flushStrip();
@@ -69,7 +76,7 @@ function buildTriangleStripFaces(indices, hasUV, maxVertexIndex) {
     return faces;
 }
 
-function buildTriangleListFaces(indices, hasUV, maxVertexIndex) {
+function buildTriangleListFaces(indices, hasUV, maxVertexIndex, options = {}) {
     const faces = [];
 
     function faceElement(index) {
@@ -78,15 +85,9 @@ function buildTriangleListFaces(indices, hasUV, maxVertexIndex) {
     }
 
     for (let i = 0; i + 2 < indices.length; i += 3) {
-        const tri = [indices[i], indices[i + 1], indices[i + 2]];
-        if (
-            tri.some((index) => index === 0xFFFF || index < 0 || index > maxVertexIndex)
-            || tri[0] === tri[1]
-            || tri[1] === tri[2]
-            || tri[0] === tri[2]
-        ) {
-            continue;
-        }
+        let tri = [indices[i], indices[i + 1], indices[i + 2]];
+        if (tri.some((index) => index === 0xFFFF || index < 0 || index > maxVertexIndex) || tri[0] === tri[1] || tri[1] === tri[2] || tri[0] === tri[2]) continue;
+        if (options.reverseWinding) tri = [tri[0], tri[2], tri[1]];
         faces.push(tri.map(faceElement));
     }
 
@@ -95,9 +96,7 @@ function buildTriangleListFaces(indices, hasUV, maxVertexIndex) {
 
 function boundsForPositions(positions) {
     const valid = positions.filter((position) => position && position.length >= 3 && position.every(Number.isFinite));
-    if (valid.length <= 0) {
-        return null;
-    }
+    if (valid.length <= 0) return null;
 
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -108,37 +107,55 @@ function boundsForPositions(positions) {
         }
     }
 
-    return {
-        min,
-        max,
-        size: max.map((value, i) => value - min[i])
-    };
+    return { min, max, size: max.map((value, i) => value - min[i]) };
 }
 
-async function writePartObj({ parsed, part, baseName, outputPath, options }) {
+function parsePartFilter(partOption) {
+    if (partOption === undefined || partOption === null || partOption === '') return null;
+    const parts = String(partOption)
+        .split(',')
+        .map((value) => Number.parseInt(value.trim(), 10))
+        .filter((value) => Number.isInteger(value) && value >= 0);
+    return parts.length > 0 ? new Set(parts) : null;
+}
+
+function findAlternateVertexBuffers(parsed, part, limit = 8) {
+    if (!part.indexBuffer || part.indexBuffer.endOffset === null) return [];
+
+    const target = part.indexBuffer.alignedEndOffset || part.indexBuffer.endOffset;
+    return parsed.vertexDescriptors
+        .filter((descriptor) => descriptor.declarations && descriptor.declarations.some((decl) => decl.usage === 0x00))
+        .map((descriptor) => ({
+            descriptor,
+            distance: Math.abs(descriptor.vertexBufferDataOffset - target),
+            afterIndexBuffer: descriptor.vertexBufferDataOffset >= part.indexBuffer.offset
+        }))
+        .sort((a, b) => {
+            if (a.afterIndexBuffer !== b.afterIndexBuffer) return a.afterIndexBuffer ? -1 : 1;
+            return a.distance - b.distance;
+        })
+        .slice(0, limit)
+        .map((entry) => entry.descriptor);
+}
+
+async function writePartObj({ parsed, part, baseName, outputPath, options, overrideVertexBuffer = null, variantName = null }) {
     const primitiveMode = options.primitiveMode || 'strip';
     const flipV = options.flipV === true || options.flipV === 'true';
     const positionMode = options.positionMode || 'declared';
     const uvMode = options.uvMode || 'declared';
 
-    if (!part.vertexBuffer) {
-        return { skipped: true, reason: 'No matching vertex buffer descriptor was found.' };
-    }
+    const vertexBuffer = overrideVertexBuffer || part.vertexBuffer;
+    if (!vertexBuffer) return { skipped: true, reason: 'No matching vertex buffer descriptor was found.' };
 
-    const vertexBuffer = part.vertexBuffer;
     const positionDeclaration = findDeclaration(vertexBuffer, 0x00);
     const uvDeclaration = findDeclaration(vertexBuffer, 0x08);
+    if (!positionDeclaration) return { skipped: true, reason: 'No POSITION declaration was found.' };
 
-    if (!positionDeclaration) {
-        return { skipped: true, reason: 'No POSITION declaration was found.' };
-    }
+    const indices = readIndices(parsed.dataBlock, part.indexBuffer, options);
+    if (indices.length <= 0) return { skipped: true, reason: 'No index buffer data was found.' };
 
-    const indices = readIndices(parsed.dataBlock, part.indexBuffer);
-    if (indices.length <= 0) {
-        return { skipped: true, reason: 'No index buffer data was found.' };
-    }
-
-    const partName = `part_${String(part.index).padStart(3, '0')}_${safeName(part.hashOrId)}`;
+    const partNameBase = `part_${String(part.index).padStart(3, '0')}_${safeName(part.hashOrId)}`;
+    const partName = variantName ? `${partNameBase}_${safeName(variantName)}` : partNameBase;
     const partDir = path.join(outputPath, 'parts', partName);
     await mkdir(partDir);
 
@@ -149,7 +166,6 @@ async function writePartObj({ parsed, part, baseName, outputPath, options }) {
     const objLines = [];
     const mtlLines = [];
     const positions = [];
-    const uvs = [];
 
     objLines.push(`# ${partName} from ${baseName}`);
     objLines.push(`# Isolated SCNE model part for visual review`);
@@ -184,45 +200,33 @@ async function writePartObj({ parsed, part, baseName, outputPath, options }) {
             const uv = readAttributeComponents(parsed.dataBlock, vertexBuffer, uvDeclaration, vertexIndex, uvMode);
             if (!uv || uv.length < 2 || !Number.isFinite(uv[0]) || !Number.isFinite(uv[1])) {
                 badUvCount++;
-                uvs.push(null);
                 objLines.push('vt 0 0');
             }
             else {
                 const outUv = [uv[0], flipV ? 1 - uv[1] : uv[1]];
-                uvs.push(outUv);
                 objLines.push(`vt ${formatFloat(outUv[0])} ${formatFloat(outUv[1])}`);
             }
         }
     }
 
     const faces = primitiveMode === 'list'
-        ? buildTriangleListFaces(indices, hasUV, vertexBuffer.vertexCount - 1)
-        : buildTriangleStripFaces(indices, hasUV, vertexBuffer.vertexCount - 1);
+        ? buildTriangleListFaces(indices, hasUV, vertexBuffer.vertexCount - 1, options)
+        : buildTriangleStripFaces(indices, hasUV, vertexBuffer.vertexCount - 1, options);
 
-    for (const face of faces) {
-        objLines.push(`f ${face.join(' ')}`);
-    }
+    for (const face of faces) objLines.push(`f ${face.join(' ')}`);
 
     await fs.writeFile(objPath, `${objLines.join('\n')}\n`);
     await fs.writeFile(mtlPath, `${mtlLines.join('\n')}\n`);
 
     if (options.dumpRawBuffers) {
-        await fs.writeFile(
-            path.join(partDir, 'index_buffer.u16be.bin'),
-            parsed.dataBlock.slice(part.indexBuffer.offset, part.indexBuffer.endOffset)
-        );
-        await fs.writeFile(
-            path.join(partDir, 'vertex_buffer.bin'),
-            parsed.dataBlock.slice(
-                vertexBuffer.vertexBufferDataOffset,
-                vertexBuffer.vertexBufferDataOffset + vertexBuffer.vertexBufferByteLength
-            )
-        );
+        await fs.writeFile(path.join(partDir, 'index_buffer.u16be.bin'), parsed.dataBlock.slice(part.indexBuffer.offset, part.indexBuffer.endOffset));
+        await fs.writeFile(path.join(partDir, 'vertex_buffer.bin'), parsed.dataBlock.slice(vertexBuffer.vertexBufferDataOffset, vertexBuffer.vertexBufferDataOffset + vertexBuffer.vertexBufferByteLength));
     }
 
     const info = {
         index: part.index,
         hashOrId: part.hashOrId,
+        variantName,
         objPath,
         mtlPath,
         primitiveMode,
@@ -232,12 +236,14 @@ async function writePartObj({ parsed, part, baseName, outputPath, options }) {
         vertexStride: vertexBuffer.vertexStride,
         indexCount: indices.length,
         faceCount: faces.length,
+        maxIndexSeen: indices.filter((v) => v !== 0xFFFF).reduce((max, v) => Math.max(max, v), 0),
         bounds: boundsForPositions(positions),
         badPositionCount,
         hasUV,
         badUvCount,
         positionDeclaration,
         uvDeclaration,
+        vertexBufferDescriptorOffset: vertexBuffer.offset,
         vertexBufferDataOffset: vertexBuffer.vertexBufferDataOffset,
         indexBufferOffset: part.indexBuffer.offset,
         reviewStatus: 'unchecked',
@@ -248,62 +254,100 @@ async function writePartObj({ parsed, part, baseName, outputPath, options }) {
     return info;
 }
 
+async function exportVariantsForPart({ parsed, part, baseName, outputPath, options }) {
+    const variantRoot = path.join(outputPath, 'part_variants');
+    await mkdir(variantRoot);
+
+    const variants = [];
+    const vertexBuffers = findAlternateVertexBuffers(parsed, part, Number.parseInt(options.variantVertexLimit || 8, 10));
+    const primitiveModes = ['strip', 'list'];
+    const restartModes = [false, true];
+    const reverseModes = [false, true];
+
+    for (let vbIndex = 0; vbIndex < vertexBuffers.length; vbIndex++) {
+        for (const primitiveMode of primitiveModes) {
+            for (const treatZeroAsRestart of restartModes) {
+                for (const reverseWinding of reverseModes) {
+                    const variantName = `vb${vbIndex}_desc0x${vertexBuffers[vbIndex].offset.toString(16)}_${primitiveMode}${treatZeroAsRestart ? '_zeroRestart' : ''}${reverseWinding ? '_rev' : ''}`;
+                    const result = await writePartObj({
+                        parsed,
+                        part,
+                        baseName,
+                        outputPath: variantRoot,
+                        overrideVertexBuffer: vertexBuffers[vbIndex],
+                        variantName,
+                        options: {
+                            ...options,
+                            primitiveMode,
+                            treatZeroAsRestart,
+                            reverseWinding
+                        }
+                    });
+                    if (!result.skipped) variants.push(result);
+                }
+            }
+        }
+    }
+
+    return variants;
+}
+
 async function exportScneSplitParts(scnePath, outputPath, options = {}) {
     await mkdir(outputPath);
 
     const scneBuffer = await fs.readFile(scnePath);
     const parsed = parseScnePackage(scneBuffer);
     const baseName = safeName(path.basename(scnePath, path.extname(scnePath)) || 'scne');
+    const partFilter = parsePartFilter(options.part);
 
     const manifest = {
         source: scnePath,
         outputPath,
         baseName,
-        mode: 'split-parts',
+        mode: options.partVariants ? 'part-variants' : 'split-parts',
         primitiveMode: options.primitiveMode || 'strip',
         positionMode: options.positionMode || 'declared',
         uvMode: options.uvMode || 'declared',
+        partFilter: partFilter ? [...partFilter] : null,
         flipV: options.flipV === true || options.flipV === 'true',
         modelPartCount: parsed.modelParts.length,
         exportedParts: [],
+        variantParts: [],
         skippedParts: [],
         reviewInstructions: [
-            'Open OBJ files under parts/*/*.obj one at a time in Blender or a model viewer.',
-            'Mark each part JSON reviewStatus as good, bad-topology, bad-position, bad-uv, or unknown.',
-            'Send the manifest or the edited per-part JSON files back so bad parts can be mapped to SCNE records.'
+            'Open OBJ files under parts/*/*.obj or part_variants/parts/*/*.obj one at a time.',
+            'For part_009, pick the variant that removes the jagged center/court-crossing bars, then report its variantName.',
+            'The variantName records descriptor offset, primitive mode, restart mode, and winding mode.'
         ]
     };
 
     await mkdir(path.join(outputPath, 'parts'));
 
     for (const part of parsed.modelParts) {
+        if (partFilter && !partFilter.has(part.index)) continue;
         try {
-            const result = await writePartObj({ parsed, part, baseName, outputPath, options });
-            if (result.skipped) {
-                manifest.skippedParts.push({
-                    index: part.index,
-                    hashOrId: part.hashOrId,
-                    reason: result.reason
-                });
+            if (options.partVariants) {
+                const variants = await exportVariantsForPart({ parsed, part, baseName, outputPath, options });
+                manifest.variantParts.push({ index: part.index, hashOrId: part.hashOrId, variants });
             }
             else {
-                manifest.exportedParts.push(result);
+                const result = await writePartObj({ parsed, part, baseName, outputPath, options });
+                if (result.skipped) manifest.skippedParts.push({ index: part.index, hashOrId: part.hashOrId, reason: result.reason });
+                else manifest.exportedParts.push(result);
             }
         }
         catch (err) {
-            manifest.skippedParts.push({
-                index: part.index,
-                hashOrId: part.hashOrId,
-                reason: err.message
-            });
+            manifest.skippedParts.push({ index: part.index, hashOrId: part.hashOrId, reason: err.message });
         }
     }
 
-    const manifestPath = path.join(outputPath, `${baseName}.split-parts-manifest.json`);
+    const manifestPath = path.join(outputPath, `${baseName}.${options.partVariants ? 'part-variants' : 'split-parts'}-manifest.json`);
     await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
     return manifest;
 }
 
 module.exports = {
-    exportScneSplitParts
+    exportScneSplitParts,
+    writePartObj,
+    findAlternateVertexBuffers
 };
