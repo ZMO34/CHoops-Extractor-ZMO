@@ -12,9 +12,55 @@ const ChoopsTextureReader = require('../2k-tools/src/parser/choops/ChoopsTexture
 
 const hashUtil = require('../2k-tools/src/util/2kHashUtil');
 
+function cleanName(value) {
+    return String(value || 'unnamed').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+}
+
+function typeCodeToFolder(typeCode) {
+    const typeName = IFFType.typeToString(typeCode);
+    return cleanName(typeName || 'UNKNOWN').toUpperCase();
+}
+
+function buildToolWrapper(file) {
+    const toolWrapperBuf = Buffer.alloc(0xC + (file.dataBlocks.length * 4));
+    toolWrapperBuf.writeUInt32BE(0x326B546C, 0x0);
+    toolWrapperBuf.writeUInt32BE(toolWrapperBuf.length, 0x4);
+    toolWrapperBuf.writeUInt16BE(file.type, 0x8);
+    toolWrapperBuf.writeUInt16BE(file.dataBlocks.length, 0xA);
+
+    file.dataBlocks.forEach((dataBlock, index) => {
+        toolWrapperBuf.writeUInt32BE(dataBlock.data.length, 0xC + (index * 4));
+    });
+
+    return Buffer.concat([
+        toolWrapperBuf,
+        ...file.dataBlocks.map((block) => block.data)
+    ]);
+}
+
+function makeChunkManifest({ containerName, file, fileType, rawFileName, relativeOutputPath, convertedFiles }) {
+    return {
+        sourceContainer: containerName,
+        name: file.name,
+        type: fileType.toUpperCase(),
+        typeCode: file.type,
+        dataBlockCount: file.dataBlocks.length,
+        dataBlockSizes: file.dataBlocks.map((block) => block.data.length),
+        rawFileName,
+        relativeOutputPath,
+        convertedFiles,
+        totalRawSize: file.dataBlocks.reduce((sum, block) => sum + block.data.length, 0)
+    };
+}
+
+async function writeJson(filePath, data) {
+    await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+}
+
 module.exports = async (inputPath, outputPath, options) => {
     const defaultLogPath = path.join(outputPath, '_logs', `choops-extractor-output_${Date.now().toString()}.txt`);
     let logOutput = options.logOutput ? options.logOutput : defaultLogPath;
+    const sortByType = options.sortByType === true || options.sortByType === 'true';
 
     const loggerFormat = format.combine(
         format.colorize(),
@@ -72,9 +118,13 @@ module.exports = async (inputPath, outputPath, options) => {
         logger.info(`\t- Raw type: Extracting raw type. Will not convert to a texture.`);
     }
 
+    if (sortByType) {
+        logger.info('\t- Sort by type: Organizing each container into TXTR/SCNE/CDAN/etc folders with manifests.');
+    }
+
     logger.info('\n** Reading data from game files **\n');
 
-    mkdir(path.join(outputPath, '_overrides'));
+    await mkdir(path.join(outputPath, '_overrides'));
 
     controller.on('progress', progressHandler);
     await controller.read({
@@ -115,18 +165,46 @@ module.exports = async (inputPath, outputPath, options) => {
 
     logger.info('\n** Reading IFFs **\n');
 
+    const masterManifest = {
+        inputPath,
+        outputPath,
+        createdAt: new Date().toISOString(),
+        sortByType,
+        containers: []
+    };
+
     for (const iffData of iffsToRead) {
         logger.info(`${counter} - ${iffData.name} (NameHash=${iffData.nameHash.toString(16).padStart(8, '0')}, GameFileIndex=${iffData.location}, GameFileOffset=${iffData.offset.toString(16)})`);
         
         const iffDataName = iffData.name.indexOf('.') >= 0 ? iffData.name.slice(0, iffData.name.length - 4) : iffData.name;
         const iffFileName = iffData.name.indexOf('.') >= 0 ? iffData.name : `${iffData.name}.iff`;
-        const folderName = path.join(outputPath, iffDataName);
+        const folderName = path.join(outputPath, cleanName(iffDataName));
+        const containerDir = sortByType ? path.join(folderName, '_container') : folderName;
+        const manifestsDir = path.join(folderName, '_manifests');
         await mkdir(folderName);
+        if (sortByType) {
+            await mkdir(containerDir);
+            await mkdir(manifestsDir);
+        }
+
+        const containerManifest = {
+            index: counter,
+            name: iffData.name,
+            baseName: iffDataName,
+            iffFileName,
+            nameHash: iffData.nameHash.toString(16).padStart(8, '0'),
+            gameFileIndex: iffData.location,
+            gameFileOffsetHex: iffData.offset.toString(16),
+            outputFolder: path.relative(outputPath, folderName),
+            chunkCount: 0,
+            typeCounts: {},
+            chunks: []
+        };
 
         if (options.iffOnly) {
             if (options.rawIff) {
                 const iffBuf = await controller.getFileRawData(iffData.name);
-                await fs.writeFile(path.join(folderName, iffFileName), iffBuf);
+                await fs.writeFile(path.join(containerDir, iffFileName), iffBuf);
             }
             else {
                 const iff = await controller.getFileController(iffData.name);
@@ -134,7 +212,7 @@ module.exports = async (inputPath, outputPath, options) => {
                 await new Promise((resolve, reject) => {
                     pipeline(
                         new IFFWriter(iff.file).createStream(),
-                        fsBase.createWriteStream(path.join(folderName, iffFileName)),
+                        fsBase.createWriteStream(path.join(containerDir, iffFileName)),
                         (err) => {
                             if (err) reject(err);
                             resolve();
@@ -146,9 +224,8 @@ module.exports = async (inputPath, outputPath, options) => {
         else {
             const iff = await controller.getFileController(iffData.name);
 
-            // extract IFFs by default
             const iffBuf = await controller.getFileRawData(iffData.name);
-            await fs.writeFile(path.join(outputPath, iffFileName), iffBuf);
+            await fs.writeFile(path.join(containerDir, iffFileName), iffBuf);
 
             if (!(iff instanceof Buffer)) {
                 try {
@@ -158,69 +235,81 @@ module.exports = async (inputPath, outputPath, options) => {
                         }
 
                         const fileType = IFFType.typeToString(file.type).toLowerCase();
-                        const subfolderName = path.join(folderName, `_${file.name}.${fileType}`);
-                        // const textureFolderName = path.join(subfolderName, 'textures');
-                        await mkdir(subfolderName);
+                        const typeFolder = sortByType ? typeCodeToFolder(file.type) : '';
+                        const chunkFolderName = sortByType
+                            ? path.join(folderName, typeFolder, cleanName(`${file.name}.${fileType}`))
+                            : path.join(folderName, `_${file.name}.${fileType}`);
+                        await mkdir(chunkFolderName);
 
-                        outputRawType();
+                        const rawFileName = `${file.name}.${fileType}`;
+                        const rawOutputPath = sortByType
+                            ? path.join(chunkFolderName, rawFileName)
+                            : path.join(folderName, rawFileName);
 
-                        // if (!options.rawType) {
+                        await fs.writeFile(rawOutputPath, buildToolWrapper(file));
+
+                        const convertedFiles = [];
+
+                        if (!options.rawType) {
                             if (file.type === IFFType.TYPES.TXTR) {
                                 const fileDds = await textureReader.toDDSFromFile(file);
                                 if (fileDds) {
-                                    await fs.writeFile(path.join(subfolderName, `${file.name}.dds`), fileDds);
+                                    const ddsPath = path.join(chunkFolderName, `${file.name}.dds`);
+                                    await fs.writeFile(ddsPath, fileDds);
+                                    convertedFiles.push(path.relative(folderName, ddsPath));
                                 }
                             }
                             else if (file.type === IFFType.TYPES.SCNE) {
                                 const packageController = await iff.getFileController(file.name, IFFType.TYPES.SCNE);
-                                // const scneFolderName = path.join(folderName, file.name);
-    
-                                // if (packageController.file.textures.length > 0) {
-                                //     await mkdir(textureFolderName);
-                                // }
-    
+
                                 for (const texture of packageController.file.textures) {
                                     const fileDds = await textureReader.toDDSFromTexture(texture);
                                     if (fileDds) {
-                                        await fs.writeFile(path.join(subfolderName, `${texture.name}.dds`), fileDds);
+                                        const ddsPath = path.join(chunkFolderName, `${texture.name}.dds`);
+                                        await fs.writeFile(ddsPath, fileDds);
+                                        convertedFiles.push(path.relative(folderName, ddsPath));
                                     }
                                 }
                             }
-                            // else {
-                                // outputRawType();
-                            // }
-                        // }
-                        // else {
-                            // outputRawType();
-                        // }
+                        }
 
-                        async function outputRawType() {
-                            let toolWrapperBuf = Buffer.alloc(0xC + (file.dataBlocks.length * 4));
-                            toolWrapperBuf.writeUInt32BE(0x326B546C, 0x0);
-                            toolWrapperBuf.writeUInt32BE(toolWrapperBuf.length, 0x4);
-                            toolWrapperBuf.writeUInt16BE(file.type, 0x8);
-                            toolWrapperBuf.writeUInt16BE(file.dataBlocks.length, 0xA);
-                            
-                            file.dataBlocks.forEach((dataBlock, index) => {
-                                toolWrapperBuf.writeUInt32BE(dataBlock.data.length, 0xC + (index * 4));
-                            });
+                        const typeKey = fileType.toUpperCase();
+                        containerManifest.chunkCount += 1;
+                        containerManifest.typeCounts[typeKey] = (containerManifest.typeCounts[typeKey] || 0) + 1;
 
-                            let fileDataBlocks = file.dataBlocks.map((block) => {
-                                return block.data;
-                            });
+                        const chunkManifest = makeChunkManifest({
+                            containerName: iffData.name,
+                            file,
+                            fileType,
+                            rawFileName,
+                            relativeOutputPath: path.relative(folderName, rawOutputPath),
+                            convertedFiles
+                        });
 
-                            fileDataBlocks.unshift(toolWrapperBuf); // add tool wrapper header to beginning
-    
-                            await fs.writeFile(path.join(folderName, `${file.name}.${fileType}`), Buffer.concat(fileDataBlocks));
+                        containerManifest.chunks.push(chunkManifest);
+
+                        if (sortByType) {
+                            await writeJson(path.join(chunkFolderName, `${file.name}.manifest.json`), chunkManifest);
                         }
                     }
                 }
                 catch (err) {
                     logger.info('' + err);
+                    containerManifest.error = '' + err;
                 }
             }
         }
 
+        if (sortByType) {
+            await writeJson(path.join(manifestsDir, 'container_manifest.json'), containerManifest);
+        }
+
+        masterManifest.containers.push(containerManifest);
         counter += 1;
+    }
+
+    if (sortByType) {
+        await mkdir(path.join(outputPath, '_summary'));
+        await writeJson(path.join(outputPath, '_summary', 'rip_manifest.json'), masterManifest);
     }
 };
