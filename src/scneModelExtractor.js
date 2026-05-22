@@ -6,6 +6,54 @@ const TOOL_WRAPPER_MAGIC = 0x326b546c; // 2kTl
 const PACKAGE_HEADER_SIZE = 0x54;
 const TEXTURE_HEADER_SIZE = 0xB0;
 const MODEL_PART_RECORD_SIZE = 0xB0;
+const MODEL_PART_FIELD_COUNT = MODEL_PART_RECORD_SIZE / 4;
+
+const MODEL_PART_FIELD_MAP = [
+    'renderObjectOffsetPlusOne',
+    'partHashOrId',
+    'lodOrVisibilityFlag',
+    'unknownConstant0A',
+    'boundingRadiusOrScaleFloat',
+    'unknownConstant04',
+    'zero06',
+    'zero07',
+    'zero08',
+    'zero09',
+    'zero10',
+    'zero11',
+    'boundsCenterXFloat',
+    'boundsCenterYFloat',
+    'boundsCenterZFloat',
+    'transformWFloat',
+    'zero16',
+    'zero17',
+    'zero18',
+    'scaleXFloat',
+    'scaleYFloat',
+    'scaleZFloat',
+    'zero22',
+    'zero23',
+    'sectionACount',
+    'sectionAOffsetPlusOne',
+    'zero26',
+    'zero27',
+    'zero28',
+    'zero29',
+    'zero30',
+    'sectionBCount',
+    'sectionBOffsetPlusOne',
+    'sectionCCountUsuallyOne',
+    'sectionCOffsetPlusOne',
+    'zero35',
+    'zero36',
+    'sectionDCount',
+    'zero38',
+    'sectionDOffsetPlusOne',
+    'zero40',
+    'indexBufferFormatOrStrideFlags',
+    'indexCountU16',
+    'indexBufferDataOffsetPlusOne'
+];
 
 function readUInt32Safe(buf, offset) {
     if (!buf || offset < 0 || offset + 4 > buf.length) {
@@ -15,12 +63,28 @@ function readUInt32Safe(buf, offset) {
     return buf.readUInt32BE(offset);
 }
 
+function readFloat32Safe(buf, offset) {
+    if (!buf || offset < 0 || offset + 4 > buf.length) {
+        return null;
+    }
+
+    return buf.readFloatBE(offset);
+}
+
 function firstBytesHex(buf, length = 16) {
     return buf.slice(0, Math.min(length, buf.length)).toString('hex').match(/../g)?.join(' ') || '';
 }
 
 function safeName(name) {
     return String(name || 'unnamed').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+}
+
+function toHex32(value) {
+    return `0x${(value >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function oneBasedOffset(value) {
+    return value > 0 ? value - 1 : null;
 }
 
 function unwrapToolWrapper(buf) {
@@ -57,6 +121,56 @@ function unwrapToolWrapper(buf) {
         packageBuffer: Buffer.concat(blocks.map((block) => buf.slice(block.offset, block.offset + block.length))),
         blocks
     };
+}
+
+function decodeModelPartFields(fields) {
+    const named = {};
+    fields.forEach((value, index) => {
+        named[MODEL_PART_FIELD_MAP[index] || `field_${index}`] = value;
+    });
+
+    return {
+        ...named,
+        renderObjectOffset: oneBasedOffset(fields[0]),
+        sectionAOffset: oneBasedOffset(fields[25]),
+        sectionBOffset: oneBasedOffset(fields[32]),
+        sectionCOffset: oneBasedOffset(fields[34]),
+        sectionDOffset: oneBasedOffset(fields[39]),
+        indexBufferDataOffset: oneBasedOffset(fields[43]),
+        partHashOrIdHex: toHex32(fields[1]),
+        boundingRadiusOrScale: readFloat32FromUInt32(fields[4]),
+        boundsCenter: [
+            readFloat32FromUInt32(fields[12]),
+            readFloat32FromUInt32(fields[13]),
+            readFloat32FromUInt32(fields[14])
+        ],
+        transformW: readFloat32FromUInt32(fields[15]),
+        scale: [
+            readFloat32FromUInt32(fields[19]),
+            readFloat32FromUInt32(fields[20]),
+            readFloat32FromUInt32(fields[21])
+        ]
+    };
+}
+
+function readFloat32FromUInt32(value) {
+    const buf = Buffer.alloc(4);
+    buf.writeUInt32BE(value >>> 0, 0);
+    return buf.readFloatBE(0);
+}
+
+function readIndexPreview(dataBlock, offset, count, maxValues = 32) {
+    if (offset === null || offset < 0 || offset >= dataBlock.length || count <= 0) {
+        return [];
+    }
+
+    const values = [];
+    const limit = Math.min(count, maxValues, Math.floor((dataBlock.length - offset) / 2));
+    for (let i = 0; i < limit; i++) {
+        values.push(dataBlock.readUInt16BE(offset + (i * 2)));
+    }
+
+    return values;
 }
 
 function parseScnePackage(buf) {
@@ -100,6 +214,7 @@ function parseScnePackage(buf) {
     const headerBlockSize = unwrapped.blocks.length >= 2 ? unwrapped.blocks[0].length : header.packageNameOffset;
     const dataBlockOffset = headerBlockSize;
     const dataBlockSize = Math.max(0, packageBuffer.length - dataBlockOffset);
+    const dataBlock = unwrapped.blocks.length >= 2 ? unwrapped.blocks[1] : packageBuffer.slice(dataBlockOffset);
 
     const modelParts = [];
     if (header.numberOfModelParts > 0 && header.modelPartsEnd <= packageBuffer.length) {
@@ -107,33 +222,41 @@ function parseScnePackage(buf) {
             const recordOffset = header.modelPartsOffset + (i * MODEL_PART_RECORD_SIZE);
             const record = packageBuffer.slice(recordOffset, recordOffset + MODEL_PART_RECORD_SIZE);
             const fields = [];
-            for (let fieldIndex = 0; fieldIndex < MODEL_PART_RECORD_SIZE / 4; fieldIndex++) {
+            for (let fieldIndex = 0; fieldIndex < MODEL_PART_FIELD_COUNT; fieldIndex++) {
                 fields.push(record.readUInt32BE(fieldIndex * 4));
             }
 
-            const headerReferences = [];
-            fields.forEach((value, fieldIndex) => {
-                if (value > 0 && value < headerBlockSize) {
-                    headerReferences.push({ fieldIndex, offset: value });
-                }
-            });
+            const decoded = decodeModelPartFields(fields);
 
-            const dataReferences = [];
-            fields.forEach((value, fieldIndex) => {
-                if (value > 0 && value < dataBlockSize) {
-                    dataReferences.push({ fieldIndex, offset: value });
-                }
-            });
+            const headerReferences = [
+                { fieldIndex: 0, name: 'renderObjectOffset', offset: decoded.renderObjectOffset },
+                { fieldIndex: 25, name: 'sectionAOffset', offset: decoded.sectionAOffset },
+                { fieldIndex: 32, name: 'sectionBOffset', offset: decoded.sectionBOffset },
+                { fieldIndex: 34, name: 'sectionCOffset', offset: decoded.sectionCOffset },
+                { fieldIndex: 39, name: 'sectionDOffset', offset: decoded.sectionDOffset }
+            ].filter((ref) => ref.offset !== null && ref.offset >= 0 && ref.offset < headerBlockSize);
+
+            const indexBufferEnd = decoded.indexBufferDataOffset !== null
+                ? decoded.indexBufferDataOffset + (decoded.indexCountU16 * 2)
+                : null;
 
             modelParts.push({
                 index: i,
                 recordOffset,
                 recordLength: MODEL_PART_RECORD_SIZE,
-                possibleNameOrDataOffset: fields[0],
-                hashOrId: `0x${fields[1].toString(16).padStart(8, '0')}`,
+                hashOrId: decoded.partHashOrIdHex,
                 fields,
+                mapped: decoded,
                 headerReferences,
-                dataReferences
+                indexBuffer: {
+                    offset: decoded.indexBufferDataOffset,
+                    offsetPlusOne: decoded.indexBufferDataOffsetPlusOne,
+                    countU16: decoded.indexCountU16,
+                    byteLength: decoded.indexCountU16 * 2,
+                    endOffset: indexBufferEnd,
+                    formatOrStrideFlags: toHex32(decoded.indexBufferFormatOrStrideFlags),
+                    previewU16BE: readIndexPreview(dataBlock, decoded.indexBufferDataOffset, decoded.indexCountU16)
+                }
             });
         }
     }
@@ -144,6 +267,7 @@ function parseScnePackage(buf) {
         headerBlockSize,
         dataBlockOffset,
         dataBlockSize,
+        dataBlock,
         modelParts
     };
 }
@@ -164,12 +288,13 @@ async function dumpScneModelCandidates(scneBuffer, outputPath, options = {}) {
         dataBlockSize: parsed.dataBlockSize,
         header,
         modelPartRecordSize: MODEL_PART_RECORD_SIZE,
+        modelPartFieldMap: MODEL_PART_FIELD_MAP,
         modelParts: parsed.modelParts,
         notes: [
-            'This is a diagnostic SCNE model-part export, not a final OBJ/FBX converter yet.',
-            'The current known SCNE reader extracts textures but did not parse these model part records.',
-            'Model part records are 0xB0 bytes in the tested s000 floor.scne and arena.scne files.',
-            'The dumped regions are intended for mapping vertex/index buffer layout next.'
+            'SCNE model-part records are 0xB0 bytes / 44 BE u32 fields in s000 floor.scne and arena.scne.',
+            'Offsets in the model-part record are 1-based: actual offset = stored value - 1.',
+            'field42/indexCountU16 and field43/indexBufferDataOffsetPlusOne point to the 16-bit BE index buffer in data block 1.',
+            'The current unknowns are the sectionA/B/C/D structures and exact vertex-buffer descriptors.'
         ]
     };
 
@@ -205,17 +330,18 @@ async function dumpScneModelCandidates(scneBuffer, outputPath, options = {}) {
             packageBuffer.slice(part.recordOffset, part.recordOffset + part.recordLength)
         );
 
-        const refOffsets = [...new Set(part.headerReferences.map((ref) => ref.offset))]
-            .filter((offset) => offset >= 0 && offset < packageBuffer.length)
-            .sort((a, b) => a - b)
-            .slice(0, 32);
-
-        for (let i = 0; i < refOffsets.length; i++) {
-            const refOffset = refOffsets[i];
-            const refEnd = Math.min(packageBuffer.length, refOffset + 0x400);
+        if (part.indexBuffer.offset !== null && part.indexBuffer.endOffset <= parsed.dataBlock.length) {
             await fs.writeFile(
-                path.join(partDir, `header_ref_${String(i).padStart(2, '0')}_0x${refOffset.toString(16)}.bin`),
-                packageBuffer.slice(refOffset, refEnd)
+                path.join(partDir, 'index_buffer.u16be.bin'),
+                parsed.dataBlock.slice(part.indexBuffer.offset, part.indexBuffer.endOffset)
+            );
+        }
+
+        for (const ref of part.headerReferences) {
+            const refEnd = Math.min(packageBuffer.length, ref.offset + 0x400);
+            await fs.writeFile(
+                path.join(partDir, `${ref.name}_0x${ref.offset.toString(16)}.bin`),
+                packageBuffer.slice(ref.offset, refEnd)
             );
         }
     }
@@ -232,6 +358,7 @@ async function dumpScneModelCandidates(scneBuffer, outputPath, options = {}) {
 }
 
 module.exports = {
+    MODEL_PART_FIELD_MAP,
     parseScnePackage,
     dumpScneModelCandidates,
     unwrapToolWrapper
