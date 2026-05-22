@@ -72,10 +72,13 @@ program.command('export-scne-obj')
     .option('--uv-mode <mode>', 'UV decode mode', 'declared')
     .option('--experimental-auto-decode', 'Allow experimental scored auto-decoding instead of stable declared defaults')
     .option('--split-parts', 'Export each SCNE model part into its own OBJ/MTL pair for debugging')
+    .option('--part <numbers>', 'Export only specific model part indices, comma separated. Example: --part 9 or --part 9,54,55')
+    .option('--part-variants', 'Generate alternate descriptor/topology interpretations for selected parts')
+    .option('--variant-vertex-limit <number>', 'Maximum nearby vertex descriptors to test in --part-variants mode', '8')
     .option('--flip-v', 'Flip UV V coordinate during export')
     .option('--dump-raw-buffers', 'Dump raw vertex/index buffers alongside OBJ export')
     .action(async (scneFile, outputPath, options) => {
-        if (options.splitParts) {
+        if (options.splitParts || options.part || options.partVariants) {
             await splitPartExporter.exportScneSplitParts(scneFile, outputPath, options);
         }
         else {
