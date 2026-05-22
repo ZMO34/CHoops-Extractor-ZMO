@@ -9,6 +9,7 @@ const builder = require('./src/builder');
 const assetExtractor = require('./src/assetExtractor');
 const cdfDecompressor = require('./src/cdfDecompressor');
 const cdfTextureExtractor = require('./src/cdfTextureExtractor');
+const teamselectlogoTool = require('./src/teamselectlogoTool');
 const scneObjExporter = require('./src/scneObjExporterStable');
 const splitPartExporter = require('./src/scneSplitPartExporter');
 const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
@@ -86,6 +87,36 @@ program.command('extract-cdf-textures')
             scanAll: options.scanAll,
             verbose: options.verbose
         });
+    });
+
+program.command('export-teamselectlogo-dds')
+    .description('Export teamselectlogo.cdf records into editable DDS files.')
+    .argument('<cdf file>', 'Path to teamselectlogo.cdf')
+    .argument('<iff file>', 'Path to teamselectlogo.iff')
+    .argument('<output path>', 'Output folder for editable DDS files')
+    .option('--verbose', 'Enable verbose logging')
+    .action(async (cdfFile, iffFile, outputPath, options) => {
+        await teamselectlogoTool.exportTeamselectlogo(
+            cdfFile,
+            iffFile,
+            outputPath,
+            options
+        );
+    });
+
+program.command('import-teamselectlogo-dds')
+    .description('Reimport edited DDS files back into a teamselectlogo.cdf archive.')
+    .argument('<original cdf>', 'Original teamselectlogo.cdf')
+    .argument('<manifest>', 'teamselectlogo_manifest.json from export step')
+    .argument('<edited dds dir>', 'Directory containing edited DDS files')
+    .argument('<output cdf>', 'Output rebuilt CDF path')
+    .action(async (originalCdf, manifest, editedDdsDir, outputCdf) => {
+        await teamselectlogoTool.importTeamselectlogo(
+            originalCdf,
+            manifest,
+            editedDdsDir,
+            outputCdf
+        );
     });
 
 program.command('export-scne-obj')
