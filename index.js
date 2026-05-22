@@ -8,6 +8,7 @@ const reverter = require('./src/reverter');
 const builder = require('./src/builder');
 const assetExtractor = require('./src/assetExtractor');
 const cdfDecompressor = require('./src/cdfDecompressor');
+const cdfTextureExtractor = require('./src/cdfTextureExtractor');
 const scneObjExporter = require('./src/scneObjExporterStable');
 const splitPartExporter = require('./src/scneSplitPartExporter');
 const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
@@ -61,6 +62,26 @@ program.command('decompress-cdf')
     .option('--dump-table-chunks', 'Attempt offset-table chunk splitting and decompression')
     .action(async (cdfFile, outputPath, options) => {
         await cdfDecompressor.decompressCdfFile(cdfFile, outputPath, options);
+    });
+
+program.command('extract-cdf-textures')
+    .description('Extract CDF texture records and optionally convert them to DDS using bundled gtf2dds.exe.')
+    .argument('<cdf file>', 'Path to CDF texture file, such as teamselectlogo.cdf')
+    .argument('<output path>', 'Path to output extracted records and DDS files')
+    .option('--iff <iff file>', 'Optional matching IFF metadata file, such as teamselectlogo.iff')
+    .option('--dds', 'Attempt DDS conversion using bundled gtf2dds.exe')
+    .option('--limit <number>', 'Only process the first N records for quick testing')
+    .option('--gtf2dds-path <path>', 'Override path to gtf2dds.exe')
+    .option('--keep-gtf-candidates', 'Keep temporary .gtf candidate files used for conversion tests')
+    .option('--dump-full-records', 'Dump each full CDF texture record as .cdftex')
+    .option('--dump-headers', 'Dump each parsed CDF texture header')
+    .option('--no-dump-payloads', 'Do not dump raw payload files unless needed for DDS conversion')
+    .action(async (cdfFile, outputPath, options) => {
+        await cdfTextureExtractor.extractCdfTextureRecords(cdfFile, outputPath, {
+            ...options,
+            iffPath: options.iff,
+            convertDds: options.dds
+        });
     });
 
 program.command('export-scne-obj')
