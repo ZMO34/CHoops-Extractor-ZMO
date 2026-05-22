@@ -14,7 +14,11 @@
   "dependencies": {
     "commander": "^9.1.0",
     "env-paths": "^2.2.1",
+    "long": "^5.2.3",
     "make-dir": "^3.1.0",
+    "stream-chunker": "^1.2.8",
+    "stream-parser": "^0.3.1",
+    "uuid": "^8.3.2",
     "winston": "^3.7.2"
   },
   "pkg": {
