@@ -11,12 +11,42 @@ const DEFAULT_WIDTH = 256;
 const DEFAULT_HEIGHT = 128;
 const DEFAULT_FORMAT = 'DXT1';
 const DEFAULT_IMAGE_RECORD_OFFSET = 0x78;
-const GTF_TEXTURE_DESCRIPTOR_OFFSET = 0x58;
 const GTF_TEXTURE_DESCRIPTOR_SIZE = 0x18;
-const CDF_TEXTURE_DATA_OFFSET = 0xB0;
+
+const DEFAULT_GTF_DESCRIPTOR_OFFSETS = [
+    0x21, // begins with 0x88 on teamselectlogo record 0; plausible GCM DXT5-family descriptor
+    0x2f, // second 0x88 hit in the record header
+    0x34,
+    0x38,
+    0x3c,
+    0x40,
+    0x48,
+    0x50,
+    0x58
+];
+
+const DEFAULT_GTF_DATA_OFFSETS = [
+    0xb0,
+    0xa0,
+    0x90,
+    0x88,
+    0x80,
+    0x78,
+    0x70
+];
 
 function boolOption(value) {
     return value === true || value === 'true';
+}
+
+function parseNumberList(value, fallback) {
+    if (!value) return fallback;
+    return String(value)
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((item) => Number.parseInt(item, item.toLowerCase().startsWith('0x') ? 16 : 10))
+        .filter((item) => Number.isFinite(item) && item >= 0);
 }
 
 async function pathExists(inputPath) {
@@ -57,7 +87,6 @@ async function prepareExecutableTool(toolName, outputPath, overridePath) {
         return bundledPath;
     }
 
-    // pkg cannot execute a binary directly from the virtual snapshot, so copy it to a real temp path first.
     const toolDir = path.join(outputPath || os.tmpdir(), '_tools');
     await mkdir(toolDir);
     const extractedToolPath = path.join(toolDir, toolName);
@@ -96,26 +125,25 @@ function getImageRecordOffset(options = {}) {
     return DEFAULT_IMAGE_RECORD_OFFSET;
 }
 
-function makeGtfFromCdfRecord(recordBuffer) {
-    if (recordBuffer.length <= CDF_TEXTURE_DATA_OFFSET) {
-        throw new Error('CDF texture record is too small to contain texture data.');
+function makeGtfFromCdfRecord(recordBuffer, descriptorOffset, dataOffset) {
+    if (descriptorOffset + GTF_TEXTURE_DESCRIPTOR_SIZE > recordBuffer.length) {
+        throw new Error(`Descriptor offset 0x${descriptorOffset.toString(16)} is outside the CDF record.`);
+    }
+
+    if (dataOffset >= recordBuffer.length) {
+        throw new Error(`Data offset 0x${dataOffset.toString(16)} is outside the CDF record.`);
     }
 
     const textureDescriptor = recordBuffer.slice(
-        GTF_TEXTURE_DESCRIPTOR_OFFSET,
-        GTF_TEXTURE_DESCRIPTOR_OFFSET + GTF_TEXTURE_DESCRIPTOR_SIZE
+        descriptorOffset,
+        descriptorOffset + GTF_TEXTURE_DESCRIPTOR_SIZE
     );
-    const textureData = recordBuffer.slice(CDF_TEXTURE_DATA_OFFSET);
+    const textureData = recordBuffer.slice(dataOffset);
 
     const gtfHeader = Buffer.alloc(0x30, 0);
-
-    // Same layout used by 2k-tools/src/parser/choops/ChoopsTextureReader.js.
-    // 0x01080000 is the GTF container signature/version used by the shipped gtf2dds.exe.
     gtfHeader.writeUInt32BE(0x01080000, 0x00);
     gtfHeader.writeUInt32BE(textureData.length + 0x30, 0x04);
     gtfHeader.writeUInt32BE(0x01, 0x08);
-
-    // Single texture table entry.
     gtfHeader.writeUInt32BE(0x00, 0x0C);
     gtfHeader.writeUInt32BE(0x30, 0x10);
     gtfHeader.writeUInt32BE(textureData.length, 0x14);
@@ -148,13 +176,9 @@ function runGtf2Dds(gtf2ddsPath, gtfPath, ddsPath) {
             stderr: result.stderr,
             error: result.error ? result.error.message : null
         });
-
-        if (result.status === 0) {
-            return { success: true, attempts: results };
-        }
     }
 
-    return { success: false, attempts: results };
+    return { attempts: results };
 }
 
 function applyExportSwizzleMode(imageData, inferred, mode) {
@@ -200,32 +224,67 @@ async function writeManualDdsVariant({ editableDir, recordName, sourceImageData,
     return ddsName;
 }
 
-async function writeGtfConvertedDds({ recordBuffer, recordName, editableDir, gtfDir, gtf2ddsPath, keepGtf }) {
-    const gtfBuffer = makeGtfFromCdfRecord(recordBuffer);
-    const gtfPath = path.join(gtfDir, `${recordName}.gtf`);
-    const ddsName = `${recordName}.dds`;
-    const ddsPath = path.join(editableDir, ddsName);
+async function writeGtfConvertedDds({ recordBuffer, recordName, editableDir, gtfDir, gtf2ddsPath, keepGtf, options }) {
+    const descriptorOffsets = parseNumberList(options.gtfDescriptorOffsets, DEFAULT_GTF_DESCRIPTOR_OFFSETS);
+    const dataOffsets = parseNumberList(options.gtfDataOffsets, DEFAULT_GTF_DATA_OFFSETS);
+    const attempts = [];
 
-    await fs.writeFile(gtfPath, gtfBuffer);
-    const conversion = runGtf2Dds(gtf2ddsPath, gtfPath, ddsPath);
-    const outputExists = await pathExists(ddsPath);
+    for (const descriptorOffset of descriptorOffsets) {
+        for (const dataOffset of dataOffsets) {
+            const suffix = `desc${descriptorOffset.toString(16)}_data${dataOffset.toString(16)}`;
+            const gtfPath = path.join(gtfDir, `${recordName}.${suffix}.gtf`);
+            const ddsName = `${recordName}.${suffix}.dds`;
+            const ddsPath = path.join(editableDir, ddsName);
 
-    if (!keepGtf) {
-        await fs.rm(gtfPath, { force: true });
+            try {
+                const gtfBuffer = makeGtfFromCdfRecord(recordBuffer, descriptorOffset, dataOffset);
+                await fs.writeFile(gtfPath, gtfBuffer);
+
+                const conversion = runGtf2Dds(gtf2ddsPath, gtfPath, ddsPath);
+                const outputExists = await pathExists(ddsPath);
+
+                attempts.push({
+                    descriptorOffset,
+                    dataOffset,
+                    gtfPath: keepGtf ? gtfPath : null,
+                    ddsPath,
+                    outputExists,
+                    conversion
+                });
+
+                if (!keepGtf) {
+                    await fs.rm(gtfPath, { force: true });
+                }
+
+                if (outputExists) {
+                    return {
+                        ddsName,
+                        gtfPath: keepGtf ? gtfPath : null,
+                        conversion,
+                        descriptorOffset,
+                        dataOffset,
+                        attempts
+                    };
+                }
+            }
+            catch (err) {
+                attempts.push({
+                    descriptorOffset,
+                    dataOffset,
+                    error: err.message
+                });
+            }
+        }
     }
 
-    if (!outputExists) {
-        throw new Error(
-            `gtf2dds failed for ${recordName}. `
-            + JSON.stringify(conversion.attempts[conversion.attempts.length - 1], null, 2)
-        );
-    }
+    const attemptLogPath = path.join(gtfDir, `${recordName}.gtf_attempts.json`);
+    await fs.writeFile(attemptLogPath, JSON.stringify(attempts, null, 2));
 
-    return {
-        ddsName,
-        gtfPath: keepGtf ? gtfPath : null,
-        conversion
-    };
+    throw new Error(
+        `No GTF candidate converted for ${recordName}. `
+        + `Kept attempt log at ${attemptLogPath}. `
+        + `Try inspecting generated GTF candidates or narrowing --gtf-descriptor-offsets / --gtf-data-offsets.`
+    );
 }
 
 async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) {
@@ -266,18 +325,20 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
         const topMipSize = ddsUtil.topMipSizeFor(inferred.width, inferred.height, inferred.format);
         const imageAbsoluteOffset = record.offset + imageRecordOffset;
 
-        if (imageAbsoluteOffset + topMipSize > record.nextOffset) {
-            throw new Error(
-                `Invalid image data window for ${recordName}: recordOffset=0x${imageRecordOffset.toString(16)}, `
-                + `topMipSize=${topMipSize}, recordEnd=0x${record.nextOffset.toString(16)}`
-            );
-        }
-
         let ddsName;
         let gtfConversion = null;
+        let gtfDescriptorOffset = null;
+        let gtfDataOffset = null;
         const variants = [];
 
         if (exportMode === 'manual') {
+            if (imageAbsoluteOffset + topMipSize > record.nextOffset) {
+                throw new Error(
+                    `Invalid image data window for ${recordName}: recordOffset=0x${imageRecordOffset.toString(16)}, `
+                    + `topMipSize=${topMipSize}, recordEnd=0x${record.nextOffset.toString(16)}`
+                );
+            }
+
             const sourceImageData = cdfBuffer.slice(
                 imageAbsoluteOffset,
                 imageAbsoluteOffset + topMipSize
@@ -310,10 +371,13 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
                 editableDir,
                 gtfDir,
                 gtf2ddsPath,
-                keepGtf
+                keepGtf,
+                options
             });
             ddsName = result.ddsName;
             gtfConversion = result.conversion;
+            gtfDescriptorOffset = result.descriptorOffset;
+            gtfDataOffset = result.dataOffset;
         }
 
         editableManifest.push({
@@ -324,6 +388,8 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
             format: inferred.format,
             exportMode,
             gtf2ddsPath: exportMode === 'gtf' ? gtf2ddsPath : null,
+            gtfDescriptorOffset,
+            gtfDataOffset,
             recordOffset: record.offset,
             recordSize: record.size,
             nextOffset: record.nextOffset,
