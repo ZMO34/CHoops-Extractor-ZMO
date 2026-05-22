@@ -141,6 +141,17 @@ function unwrapToolWrapper(buf) {
     };
 }
 
+function getBlockBuffer(unwrapped, index, fallbackOffset) {
+    if (unwrapped.blocks.length > index) {
+        const block = unwrapped.blocks[index];
+        if (block && Number.isInteger(block.offset) && Number.isInteger(block.length)) {
+            return unwrapped.packageBuffer.slice(fallbackOffset, fallbackOffset + block.length);
+        }
+    }
+
+    return unwrapped.packageBuffer.slice(fallbackOffset);
+}
+
 function decodeModelPartFields(fields) {
     const named = {};
     fields.forEach((value, index) => {
@@ -318,9 +329,6 @@ function parseVertexAttributeDeclarations(packageBuffer) {
 }
 
 function attachNearestVertexDeclarations(vertexDescriptor, allDeclarations) {
-    // In s000 floor.scne/arena.scne, the attribute records are 0x40-byte records
-    // immediately before each vertex descriptor. Some meshes expose three records
-    // (position/color/uv), others expose four or more (secondary UV/lightmap).
     return allDeclarations
         .filter((decl) => {
             return decl.vertexStride === vertexDescriptor.vertexStride
@@ -424,7 +432,7 @@ function parseScnePackage(buf) {
     const headerBlockSize = unwrapped.blocks.length >= 2 ? unwrapped.blocks[0].length : header.packageNameOffset;
     const dataBlockOffset = headerBlockSize;
     const dataBlockSize = Math.max(0, packageBuffer.length - dataBlockOffset);
-    const dataBlock = unwrapped.blocks.length >= 2 ? unwrapped.blocks[1] : packageBuffer.slice(dataBlockOffset);
+    const dataBlock = getBlockBuffer(unwrapped, 1, dataBlockOffset);
 
     const vertexDeclarations = parseVertexAttributeDeclarations(packageBuffer);
     const vertexDescriptors = parseVertexDescriptors(packageBuffer).map((descriptor) => {
