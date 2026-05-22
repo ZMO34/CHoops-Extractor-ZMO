@@ -65,8 +65,23 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
         const payload = await fs.readFile(payloadPath);
 
         const inferred = inferDimensions(record, payload.length);
+        const topMipSize = ddsUtil.topMipSizeFor(
+            inferred.width,
+            inferred.height,
+            inferred.format
+        );
 
-        const ddsBuffer = ddsUtil.wrapDds(payload, {
+        const topMipSwizzled = payload.slice(0, topMipSize);
+        const remainingTail = payload.slice(topMipSize);
+
+        const deswizzledTopMip = ddsUtil.deswizzleBcTopMip(
+            topMipSwizzled,
+            inferred.width,
+            inferred.height,
+            inferred.format
+        );
+
+        const ddsBuffer = ddsUtil.wrapDds(deswizzledTopMip, {
             width: inferred.width,
             height: inferred.height,
             fourCC: inferred.format
@@ -84,6 +99,8 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
             payloadOffset: record.payloadOffset,
             payloadSize: record.payloadSize,
             nextOffset: record.nextOffset,
+            topMipSize,
+            remainingTailSize: remainingTail.length,
             ddsPath: path.basename(ddsPath)
         });
     }
@@ -116,14 +133,40 @@ async function importTeamselectlogo(originalCdfPath, manifestPath, editedDdsDir,
         const ddsBuffer = await fs.readFile(ddsPath);
         const parsed = ddsUtil.parseDds(ddsBuffer);
 
-        if (parsed.payload.length !== entry.payloadSize) {
+        if (parsed.payload.length !== entry.topMipSize) {
             throw new Error(
                 `Edited DDS payload size mismatch for ${entry.ddsPath}. `
-                + `Expected ${entry.payloadSize}, got ${parsed.payload.length}.`
+                + `Expected top mip ${entry.topMipSize}, got ${parsed.payload.length}.`
             );
         }
 
-        parsed.payload.copy(cdfBuffer, entry.payloadOffset);
+        const existingPayload = cdfBuffer.slice(
+            entry.payloadOffset,
+            entry.payloadOffset + entry.payloadSize
+        );
+
+        const remainingTail = existingPayload.slice(entry.topMipSize);
+
+        const swizzledTopMip = ddsUtil.swizzleBcTopMip(
+            parsed.payload,
+            entry.width,
+            entry.height,
+            entry.format
+        );
+
+        const rebuiltPayload = Buffer.concat([
+            swizzledTopMip,
+            remainingTail
+        ]);
+
+        if (rebuiltPayload.length !== entry.payloadSize) {
+            throw new Error(
+                `Rebuilt payload mismatch for ${entry.ddsPath}. `
+                + `Expected ${entry.payloadSize}, got ${rebuiltPayload.length}.`
+            );
+        }
+
+        rebuiltPayload.copy(cdfBuffer, entry.payloadOffset);
     }
 
     await fs.writeFile(outputCdfPath, cdfBuffer);
