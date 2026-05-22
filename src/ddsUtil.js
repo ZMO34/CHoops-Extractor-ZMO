@@ -107,44 +107,49 @@ function copyBlock(src, srcIndex, dst, dstIndex, blockBytes) {
     }
 }
 
-function deswizzleBcTopMip(swizzledPayload, width, height, fourCC) {
+function transformBcTopMip(inputPayload, width, height, fourCC, mode, direction) {
     const blockBytes = blockBytesFor(fourCC);
     const blocksWide = Math.max(1, Math.ceil(width / 4));
     const blocksHigh = Math.max(1, Math.ceil(height / 4));
     const blockCount = blocksWide * blocksHigh;
     const topMipSize = blockCount * blockBytes;
-    const src = swizzledPayload.slice(0, topMipSize);
-    const dst = Buffer.alloc(topMipSize, 0);
+    const src = inputPayload.slice(0, topMipSize);
 
+    if (!mode || mode === 'none' || mode === 'linear') {
+        return Buffer.from(src);
+    }
+
+    const dst = Buffer.alloc(topMipSize, 0);
     for (let y = 0; y < blocksHigh; y++) {
         for (let x = 0; x < blocksWide; x++) {
             const linearIndex = y * blocksWide + x;
-            const swizzledIndex = morton2D(x, y);
-            copyBlock(src, swizzledIndex, dst, linearIndex, blockBytes);
+            let swizzledIndex;
+
+            if (mode === 'morton-yx') {
+                swizzledIndex = morton2D(y, x);
+            }
+            else {
+                swizzledIndex = morton2D(x, y);
+            }
+
+            if (direction === 'deswizzle') {
+                copyBlock(src, swizzledIndex, dst, linearIndex, blockBytes);
+            }
+            else {
+                copyBlock(src, linearIndex, dst, swizzledIndex, blockBytes);
+            }
         }
     }
 
     return dst;
 }
 
-function swizzleBcTopMip(linearPayload, width, height, fourCC) {
-    const blockBytes = blockBytesFor(fourCC);
-    const blocksWide = Math.max(1, Math.ceil(width / 4));
-    const blocksHigh = Math.max(1, Math.ceil(height / 4));
-    const blockCount = blocksWide * blocksHigh;
-    const topMipSize = blockCount * blockBytes;
-    const src = linearPayload.slice(0, topMipSize);
-    const dst = Buffer.alloc(topMipSize, 0);
+function deswizzleBcTopMip(swizzledPayload, width, height, fourCC, mode = 'morton') {
+    return transformBcTopMip(swizzledPayload, width, height, fourCC, mode, 'deswizzle');
+}
 
-    for (let y = 0; y < blocksHigh; y++) {
-        for (let x = 0; x < blocksWide; x++) {
-            const linearIndex = y * blocksWide + x;
-            const swizzledIndex = morton2D(x, y);
-            copyBlock(src, linearIndex, dst, swizzledIndex, blockBytes);
-        }
-    }
-
-    return dst;
+function swizzleBcTopMip(linearPayload, width, height, fourCC, mode = 'morton') {
+    return transformBcTopMip(linearPayload, width, height, fourCC, mode, 'swizzle');
 }
 
 module.exports = {
