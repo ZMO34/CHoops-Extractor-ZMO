@@ -31,9 +31,6 @@ async function getStats(inputPath) {
 }
 
 function isGameArchiveName(filename) {
-    // College Hoops / NBA 2K PS3 archive chunks are normally named with a
-    // leading zero. Keep the check broad because dumps from different tools may
-    // preserve extensions or slightly different casing.
     const baseName = path.basename(filename);
     return /^0/i.test(baseName) && !/\.bak$/i.test(baseName);
 }
@@ -41,7 +38,7 @@ function isGameArchiveName(filename) {
 async function getCandidateFiles(directoryPath) {
     const entries = await fs.readdir(directoryPath, { withFileTypes: true });
 
-    const candidates = entries
+    return entries
         .filter((entry) => entry.isFile() && isGameArchiveName(entry.name))
         .map((entry) => path.join(directoryPath, entry.name))
         .sort((a, b) => {
@@ -50,8 +47,6 @@ async function getCandidateFiles(directoryPath) {
                 sensitivity: 'base'
             });
         });
-
-    return candidates;
 }
 
 async function directoryContainsGameFiles(directoryPath) {
@@ -91,9 +86,7 @@ async function findGameFilesDirectory(startPath, depth = 0, visited = new Set())
     const priorityChildren = [
         path.join(resolved, 'USRDIR'),
         path.join(resolved, 'PS3_GAME', 'USRDIR'),
-        path.join(resolved, 'PS3_GAME'),
-        path.join(resolved, 'BLUS30078', 'PS3_GAME', 'USRDIR'),
-        path.join(resolved, 'BLES', 'PS3_GAME', 'USRDIR')
+        path.join(resolved, 'PS3_GAME')
     ];
 
     for (const childPath of priorityChildren) {
@@ -122,8 +115,6 @@ async function findGameFilesDirectory(startPath, depth = 0, visited = new Set())
             const aBase = path.basename(a).toUpperCase();
             const bBase = path.basename(b).toUpperCase();
 
-            // Search common PS3 layout folders first while still allowing any
-            // user-provided parent folder to work.
             const score = (value) => {
                 if (value === 'USRDIR') return 0;
                 if (value === 'PS3_GAME') return 1;
@@ -144,7 +135,7 @@ async function findGameFilesDirectory(startPath, depth = 0, visited = new Set())
     return null;
 }
 
-module.exports.resolveGameFilesDirectory = async (inputPath) => {
+async function resolveGameFilesDirectory(inputPath) {
     const normalizedPath = normalizeInputPath(inputPath);
     const foundDirectory = await findGameFilesDirectory(normalizedPath);
 
@@ -156,10 +147,10 @@ module.exports.resolveGameFilesDirectory = async (inputPath) => {
     }
 
     return foundDirectory;
-};
+}
 
-module.exports.getGameFilePaths = async (inputPath) => {
-    const gameFilesDirectory = await this.resolveGameFilesDirectory(inputPath);
+async function getGameFilePaths(inputPath) {
+    const gameFilesDirectory = await resolveGameFilesDirectory(inputPath);
     const gameFilePaths = await getCandidateFiles(gameFilesDirectory);
 
     if (gameFilePaths.length <= 0) {
@@ -167,15 +158,26 @@ module.exports.getGameFilePaths = async (inputPath) => {
     }
 
     return gameFilePaths;
-};
+}
 
-module.exports.getGameFilePathByIndex = async (inputPath, index) => {
-    const paths = await this.getGameFilePaths(inputPath);
-    const parsedIndex = parseInt(index);
+async function getGameFilePathByIndex(inputPath, index) {
+    const paths = await getGameFilePaths(inputPath);
+    const parsedIndex = Number.parseInt(index, 10);
 
     if (!Number.isInteger(parsedIndex) || parsedIndex < 0 || parsedIndex >= paths.length) {
         throw new Error(`Game archive index ${index} is out of range. Found ${paths.length} archive files.`);
     }
 
     return paths[parsedIndex];
+}
+
+module.exports = {
+    resolveGameFilesDirectory,
+    getGameFilePaths,
+    getGameFilePathByIndex,
+    _private: {
+        isGameArchiveName,
+        findGameFilesDirectory,
+        getCandidateFiles
+    }
 };
