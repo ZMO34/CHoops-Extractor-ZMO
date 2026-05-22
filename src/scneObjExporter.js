@@ -34,6 +34,21 @@ function safeName(name) {
     return String(name || 'scne').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
 }
 
+function parsePartList(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const values = String(value)
+        .split(',')
+        .map((item) => Number.parseInt(item.trim(), 10))
+        .filter((item) => Number.isInteger(item) && item >= 0);
+    return values.length > 0 ? new Set(values) : null;
+}
+
+function shouldExportPart(partIndex, includeParts, excludeParts) {
+    if (includeParts && !includeParts.has(partIndex)) return false;
+    if (excludeParts && excludeParts.has(partIndex)) return false;
+    return true;
+}
+
 function halfToFloat(value) {
     const sign = (value & 0x8000) ? -1 : 1;
     const exponent = (value >> 10) & 0x1F;
@@ -349,6 +364,8 @@ async function exportScneObj(scnePath, outputPath, options = {}) {
     const requestedPositionMode = options.positionMode || 'auto';
     const requestedUvMode = options.uvMode || 'auto';
     const minPositionScore = Number.parseFloat(options.minPositionScore || '-5000');
+    const includeParts = parsePartList(options.part || options.includeParts);
+    const excludeParts = parsePartList(options.excludeParts);
 
     const objLines = [];
     const mtlLines = [];
@@ -360,14 +377,16 @@ async function exportScneObj(scnePath, outputPath, options = {}) {
         flipV,
         positionMode: requestedPositionMode,
         uvMode: requestedUvMode,
+        includeParts: includeParts ? [...includeParts] : null,
+        excludeParts: excludeParts ? [...excludeParts] : null,
         modelPartCount: parsed.modelParts.length,
         exportedParts: [],
         skippedParts: [],
         notes: [
-            'SCNE OBJ export uses scored position/UV decode candidates to reduce exploded geometry.',
-            'Use --position-mode or --uv-mode to force a candidate from the manifest if auto-pick is wrong.',
-            'Normals/material bindings remain partial; materials are still grouped per model part.',
-            'This is now suitable for iterative court UV/model inspection, not guaranteed final SCNE reimport.'
+            'SCNE OBJ export uses grouped OBJ objects per model part.',
+            'Use --exclude-parts for helper/problem meshes like arena part 009 while keeping one combined editable OBJ.',
+            'Use --position-mode declared --uv-mode declared for stable known floor/arena exports.',
+            'Normals/material bindings remain partial; materials are still grouped per model part.'
         ]
     };
 
@@ -379,6 +398,11 @@ async function exportScneObj(scnePath, outputPath, options = {}) {
     let vtBase = 0;
 
     for (const part of parsed.modelParts) {
+        if (!shouldExportPart(part.index, includeParts, excludeParts)) {
+            manifest.skippedParts.push({ index: part.index, hashOrId: part.hashOrId, reason: 'Filtered by include/exclude part options.' });
+            continue;
+        }
+
         if (!part.vertexBuffer) {
             manifest.skippedParts.push({ index: part.index, hashOrId: part.hashOrId, reason: 'No matching vertex buffer descriptor was found.' });
             continue;
@@ -420,6 +444,7 @@ async function exportScneObj(scnePath, outputPath, options = {}) {
         mtlLines.push('');
 
         objLines.push(`o ${materialName}`);
+        objLines.push(`g ${materialName}`);
         objLines.push(`usemtl ${materialName}`);
 
         for (const position of positionChoice.best.positions) {
@@ -487,5 +512,6 @@ module.exports = {
     halfToFloat,
     readAttributeComponents,
     POSITION_DECODE_MODES,
-    UV_DECODE_MODES
+    UV_DECODE_MODES,
+    parsePartList
 };
