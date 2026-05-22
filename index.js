@@ -8,11 +8,12 @@ const reverter = require('./src/reverter');
 const builder = require('./src/builder');
 const assetExtractor = require('./src/assetExtractor');
 const cdfDecompressor = require('./src/cdfDecompressor');
+const scneObjExporter = require('./src/scneObjExporter');
 const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
 
 program
     .name('choops-extractor')
-    .version('0.5.4')
+    .version('0.5.5')
     .description('A command line utility to extract College Hoops 2k8 (PS3) textures and more.')
 
 program.command('rip')
@@ -59,6 +60,17 @@ program.command('decompress-cdf')
     .option('--dump-table-chunks', 'Attempt offset-table chunk splitting and decompression')
     .action(async (cdfFile, outputPath, options) => {
         await cdfDecompressor.decompressCdfFile(cdfFile, outputPath, options);
+    });
+
+program.command('export-scne-obj')
+    .description('Export a SCNE stadium/court model into OBJ format.')
+    .argument('<scne file>', 'Path to SCNE file')
+    .argument('<output path>', 'Path to output OBJ files')
+    .option('--primitive-mode <mode>', 'Triangle interpretation mode: strip or list', 'strip')
+    .option('--flip-v', 'Flip UV V coordinate during export')
+    .option('--dump-raw-buffers', 'Dump raw vertex/index buffers alongside OBJ export')
+    .action(async (scneFile, outputPath, options) => {
+        await scneObjExporter.exportScneObj(scneFile, outputPath, options);
     });
 
 program.command('probe')
