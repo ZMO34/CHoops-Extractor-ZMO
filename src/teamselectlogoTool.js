@@ -8,12 +8,13 @@ const ddsUtil = require('./ddsUtil');
 const DEFAULT_WIDTH = 256;
 const DEFAULT_HEIGHT = 128;
 const DEFAULT_FORMAT = 'DXT1';
+const DEFAULT_IMAGE_RECORD_OFFSET = 0x78;
 
 function boolOption(value) {
     return value === true || value === 'true';
 }
 
-function inferDimensions(record, payloadSize) {
+function inferDimensions(record, sourceSize) {
     const candidates = [
         { width: 256, height: 128, format: 'DXT1' },
         { width: 128, height: 64, format: 'DXT1' },
@@ -24,7 +25,7 @@ function inferDimensions(record, payloadSize) {
 
     for (const candidate of candidates) {
         const expected = ddsUtil.payloadSizeFor(candidate.width, candidate.height, candidate.format);
-        if (payloadSize >= expected) {
+        if (sourceSize >= expected) {
             return candidate;
         }
     }
@@ -36,21 +37,12 @@ function inferDimensions(record, payloadSize) {
     };
 }
 
-function inferImageDataOffset(payload, inferred, options = {}) {
+function getImageRecordOffset(options = {}) {
     if (options.imageDataOffset !== undefined && options.imageDataOffset !== null) {
-        return Number.parseInt(options.imageDataOffset, 10) || 0;
+        return Number.parseInt(options.imageDataOffset, 10) || DEFAULT_IMAGE_RECORD_OFFSET;
     }
 
-    const topMipSize = ddsUtil.topMipSizeFor(inferred.width, inferred.height, inferred.format);
-
-    // teamselectlogo records are 17,120 bytes for a 16,384-byte 256x128 DXT1 top mip.
-    // The extra 736 bytes are 2K/RSX side data and must not be treated as DXT blocks.
-    const trailingSideData = payload.length - topMipSize;
-    if (trailingSideData >= 0 && trailingSideData <= 4096) {
-        return trailingSideData;
-    }
-
-    return 0;
+    return DEFAULT_IMAGE_RECORD_OFFSET;
 }
 
 function applyExportSwizzleMode(imageData, inferred, mode) {
@@ -63,7 +55,7 @@ function applyExportSwizzleMode(imageData, inferred, mode) {
         inferred.width,
         inferred.height,
         inferred.format,
-        mode || 'morton'
+        mode || 'block-rect'
     );
 }
 
@@ -77,14 +69,12 @@ function applyImportSwizzleMode(imageData, entry) {
         entry.width,
         entry.height,
         entry.format,
-        entry.swizzleMode || 'morton'
+        entry.swizzleMode || 'block-rect'
     );
 }
 
-async function writeDdsVariant({ editableDir, recordName, payload, inferred, imageDataOffset, mode }) {
-    const topMipSize = ddsUtil.topMipSizeFor(inferred.width, inferred.height, inferred.format);
-    const imageData = payload.slice(imageDataOffset, imageDataOffset + topMipSize);
-    const converted = applyExportSwizzleMode(imageData, inferred, mode);
+async function writeDdsVariant({ editableDir, recordName, sourceImageData, inferred, mode }) {
+    const converted = applyExportSwizzleMode(sourceImageData, inferred, mode);
     const suffix = mode === 'none' || mode === 'linear' ? 'linear' : mode;
     const ddsName = `${recordName}.${suffix}.dds`;
     await fs.writeFile(
@@ -102,6 +92,7 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
     await mkdir(outputPath);
 
     const extractionPath = path.join(outputPath, 'raw_records');
+    const cdfBuffer = await fs.readFile(cdfPath);
 
     const manifest = await cdfTextureExtractor.extractCdfTextureRecords(
         cdfPath,
@@ -118,48 +109,45 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
     await mkdir(editableDir);
 
     const editableManifest = [];
-    const swizzleMode = options.swizzleMode || 'none';
+    const swizzleMode = options.swizzleMode || 'block-rect';
     const dumpVariants = boolOption(options.dumpVariants);
+    const imageRecordOffset = getImageRecordOffset(options);
 
     for (const record of manifest.records) {
         const recordName = `${String(record.index).padStart(4, '0')}_${record.recordIdHex}`;
-        const payloadPath = path.join(
-            extractionPath,
-            'records',
-            recordName,
-            `${recordName}.payload.bin`
-        );
-
-        const payload = await fs.readFile(payloadPath);
-        const inferred = inferDimensions(record, payload.length);
+        const sourceSize = record.nextOffset - (record.offset + imageRecordOffset);
+        const inferred = inferDimensions(record, sourceSize);
         const topMipSize = ddsUtil.topMipSizeFor(inferred.width, inferred.height, inferred.format);
-        const imageDataOffset = inferImageDataOffset(payload, inferred, options);
+        const imageAbsoluteOffset = record.offset + imageRecordOffset;
 
-        if (imageDataOffset + topMipSize > payload.length) {
+        if (imageAbsoluteOffset + topMipSize > record.nextOffset) {
             throw new Error(
-                `Invalid image data window for ${recordName}: offset=${imageDataOffset}, `
-                + `topMipSize=${topMipSize}, payloadSize=${payload.length}`
+                `Invalid image data window for ${recordName}: recordOffset=0x${imageRecordOffset.toString(16)}, `
+                + `topMipSize=${topMipSize}, recordEnd=0x${record.nextOffset.toString(16)}`
             );
         }
+
+        const sourceImageData = cdfBuffer.slice(
+            imageAbsoluteOffset,
+            imageAbsoluteOffset + topMipSize
+        );
 
         const ddsName = await writeDdsVariant({
             editableDir,
             recordName,
-            payload,
+            sourceImageData,
             inferred,
-            imageDataOffset,
             mode: swizzleMode
         });
 
         const variants = [];
         if (dumpVariants) {
-            for (const mode of ['none', 'morton', 'morton-yx']) {
+            for (const mode of ['none', 'morton', 'morton-yx', 'block-rect', 'byte-rect']) {
                 variants.push(await writeDdsVariant({
                     editableDir,
                     recordName,
-                    payload,
+                    sourceImageData,
                     inferred,
-                    imageDataOffset,
                     mode
                 }));
             }
@@ -171,13 +159,16 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
             width: inferred.width,
             height: inferred.height,
             format: inferred.format,
-            payloadOffset: record.payloadOffset,
-            payloadSize: record.payloadSize,
+            recordOffset: record.offset,
+            recordSize: record.size,
             nextOffset: record.nextOffset,
-            imageDataOffset,
+            legacyPayloadOffset: record.payloadOffset,
+            legacyPayloadSize: record.payloadSize,
+            imageRecordOffset,
+            imageAbsoluteOffset,
             topMipSize,
-            leadingSideDataSize: imageDataOffset,
-            trailingSideDataSize: payload.length - imageDataOffset - topMipSize,
+            leadingRecordSideDataSize: imageRecordOffset,
+            trailingRecordSideDataSize: record.size - imageRecordOffset - topMipSize,
             swizzleMode,
             ddsPath: ddsName,
             variants
@@ -219,31 +210,8 @@ async function importTeamselectlogo(originalCdfPath, manifestPath, editedDdsDir,
             );
         }
 
-        const existingPayload = cdfBuffer.slice(
-            entry.payloadOffset,
-            entry.payloadOffset + entry.payloadSize
-        );
-
-        const leadingSideData = existingPayload.slice(0, entry.imageDataOffset || 0);
-        const trailingStart = (entry.imageDataOffset || 0) + entry.topMipSize;
-        const trailingSideData = existingPayload.slice(trailingStart);
-
         const gameImageData = applyImportSwizzleMode(parsed.payload, entry);
-
-        const rebuiltPayload = Buffer.concat([
-            leadingSideData,
-            gameImageData,
-            trailingSideData
-        ]);
-
-        if (rebuiltPayload.length !== entry.payloadSize) {
-            throw new Error(
-                `Rebuilt payload mismatch for ${entry.ddsPath}. `
-                + `Expected ${entry.payloadSize}, got ${rebuiltPayload.length}.`
-            );
-        }
-
-        rebuiltPayload.copy(cdfBuffer, entry.payloadOffset);
+        gameImageData.copy(cdfBuffer, entry.imageAbsoluteOffset);
     }
 
     await fs.writeFile(outputCdfPath, cdfBuffer);
