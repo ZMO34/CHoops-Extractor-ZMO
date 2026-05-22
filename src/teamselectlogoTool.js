@@ -9,6 +9,10 @@ const DEFAULT_WIDTH = 256;
 const DEFAULT_HEIGHT = 128;
 const DEFAULT_FORMAT = 'DXT1';
 
+function boolOption(value) {
+    return value === true || value === 'true';
+}
+
 function inferDimensions(record, payloadSize) {
     const candidates = [
         { width: 256, height: 128, format: 'DXT1' },
@@ -20,7 +24,7 @@ function inferDimensions(record, payloadSize) {
 
     for (const candidate of candidates) {
         const expected = ddsUtil.payloadSizeFor(candidate.width, candidate.height, candidate.format);
-        if (Math.abs(expected - payloadSize) < 4096) {
+        if (payloadSize >= expected) {
             return candidate;
         }
     }
@@ -30,6 +34,68 @@ function inferDimensions(record, payloadSize) {
         height: DEFAULT_HEIGHT,
         format: DEFAULT_FORMAT
     };
+}
+
+function inferImageDataOffset(payload, inferred, options = {}) {
+    if (options.imageDataOffset !== undefined && options.imageDataOffset !== null) {
+        return Number.parseInt(options.imageDataOffset, 10) || 0;
+    }
+
+    const topMipSize = ddsUtil.topMipSizeFor(inferred.width, inferred.height, inferred.format);
+
+    // teamselectlogo records are 17,120 bytes for a 16,384-byte 256x128 DXT1 top mip.
+    // The extra 736 bytes are 2K/RSX side data and must not be treated as DXT blocks.
+    const trailingSideData = payload.length - topMipSize;
+    if (trailingSideData >= 0 && trailingSideData <= 4096) {
+        return trailingSideData;
+    }
+
+    return 0;
+}
+
+function applyExportSwizzleMode(imageData, inferred, mode) {
+    if (mode === 'none' || mode === 'linear') {
+        return Buffer.from(imageData);
+    }
+
+    return ddsUtil.deswizzleBcTopMip(
+        imageData,
+        inferred.width,
+        inferred.height,
+        inferred.format,
+        mode || 'morton'
+    );
+}
+
+function applyImportSwizzleMode(imageData, entry) {
+    if (entry.swizzleMode === 'none' || entry.swizzleMode === 'linear') {
+        return Buffer.from(imageData);
+    }
+
+    return ddsUtil.swizzleBcTopMip(
+        imageData,
+        entry.width,
+        entry.height,
+        entry.format,
+        entry.swizzleMode || 'morton'
+    );
+}
+
+async function writeDdsVariant({ editableDir, recordName, payload, inferred, imageDataOffset, mode }) {
+    const topMipSize = ddsUtil.topMipSizeFor(inferred.width, inferred.height, inferred.format);
+    const imageData = payload.slice(imageDataOffset, imageDataOffset + topMipSize);
+    const converted = applyExportSwizzleMode(imageData, inferred, mode);
+    const suffix = mode === 'none' || mode === 'linear' ? 'linear' : mode;
+    const ddsName = `${recordName}.${suffix}.dds`;
+    await fs.writeFile(
+        path.join(editableDir, ddsName),
+        ddsUtil.wrapDds(converted, {
+            width: inferred.width,
+            height: inferred.height,
+            fourCC: inferred.format
+        })
+    );
+    return ddsName;
 }
 
 async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) {
@@ -52,6 +118,8 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
     await mkdir(editableDir);
 
     const editableManifest = [];
+    const swizzleMode = options.swizzleMode || 'none';
+    const dumpVariants = boolOption(options.dumpVariants);
 
     for (const record of manifest.records) {
         const recordName = `${String(record.index).padStart(4, '0')}_${record.recordIdHex}`;
@@ -63,32 +131,39 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
         );
 
         const payload = await fs.readFile(payloadPath);
-
         const inferred = inferDimensions(record, payload.length);
-        const topMipSize = ddsUtil.topMipSizeFor(
-            inferred.width,
-            inferred.height,
-            inferred.format
-        );
+        const topMipSize = ddsUtil.topMipSizeFor(inferred.width, inferred.height, inferred.format);
+        const imageDataOffset = inferImageDataOffset(payload, inferred, options);
 
-        const topMipSwizzled = payload.slice(0, topMipSize);
-        const remainingTail = payload.slice(topMipSize);
+        if (imageDataOffset + topMipSize > payload.length) {
+            throw new Error(
+                `Invalid image data window for ${recordName}: offset=${imageDataOffset}, `
+                + `topMipSize=${topMipSize}, payloadSize=${payload.length}`
+            );
+        }
 
-        const deswizzledTopMip = ddsUtil.deswizzleBcTopMip(
-            topMipSwizzled,
-            inferred.width,
-            inferred.height,
-            inferred.format
-        );
-
-        const ddsBuffer = ddsUtil.wrapDds(deswizzledTopMip, {
-            width: inferred.width,
-            height: inferred.height,
-            fourCC: inferred.format
+        const ddsName = await writeDdsVariant({
+            editableDir,
+            recordName,
+            payload,
+            inferred,
+            imageDataOffset,
+            mode: swizzleMode
         });
 
-        const ddsPath = path.join(editableDir, `${recordName}.dds`);
-        await fs.writeFile(ddsPath, ddsBuffer);
+        const variants = [];
+        if (dumpVariants) {
+            for (const mode of ['none', 'morton', 'morton-yx']) {
+                variants.push(await writeDdsVariant({
+                    editableDir,
+                    recordName,
+                    payload,
+                    inferred,
+                    imageDataOffset,
+                    mode
+                }));
+            }
+        }
 
         editableManifest.push({
             index: record.index,
@@ -99,9 +174,13 @@ async function exportTeamselectlogo(cdfPath, iffPath, outputPath, options = {}) 
             payloadOffset: record.payloadOffset,
             payloadSize: record.payloadSize,
             nextOffset: record.nextOffset,
+            imageDataOffset,
             topMipSize,
-            remainingTailSize: remainingTail.length,
-            ddsPath: path.basename(ddsPath)
+            leadingSideDataSize: imageDataOffset,
+            trailingSideDataSize: payload.length - imageDataOffset - topMipSize,
+            swizzleMode,
+            ddsPath: ddsName,
+            variants
         });
     }
 
@@ -145,18 +224,16 @@ async function importTeamselectlogo(originalCdfPath, manifestPath, editedDdsDir,
             entry.payloadOffset + entry.payloadSize
         );
 
-        const remainingTail = existingPayload.slice(entry.topMipSize);
+        const leadingSideData = existingPayload.slice(0, entry.imageDataOffset || 0);
+        const trailingStart = (entry.imageDataOffset || 0) + entry.topMipSize;
+        const trailingSideData = existingPayload.slice(trailingStart);
 
-        const swizzledTopMip = ddsUtil.swizzleBcTopMip(
-            parsed.payload,
-            entry.width,
-            entry.height,
-            entry.format
-        );
+        const gameImageData = applyImportSwizzleMode(parsed.payload, entry);
 
         const rebuiltPayload = Buffer.concat([
-            swizzledTopMip,
-            remainingTail
+            leadingSideData,
+            gameImageData,
+            trailingSideData
         ]);
 
         if (rebuiltPayload.length !== entry.payloadSize) {
