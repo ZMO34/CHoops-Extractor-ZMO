@@ -9,6 +9,7 @@ const builder = require('./src/builder');
 const assetExtractor = require('./src/assetExtractor');
 const cdfDecompressor = require('./src/cdfDecompressor');
 const scneObjExporter = require('./src/scneObjExporterStable');
+const splitPartExporter = require('./src/scneSplitPartExporter');
 const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
 
 program
@@ -67,13 +68,19 @@ program.command('export-scne-obj')
     .argument('<scne file>', 'Path to SCNE file')
     .argument('<output path>', 'Path to output OBJ files')
     .option('--primitive-mode <mode>', 'Triangle interpretation mode: strip or list', 'strip')
-    .option('--position-mode <mode>', 'Position decode mode: declared, auto, float32-be/le, half3-be/le, s16norm3-be/le, s16fixed3-1024-be/le', 'declared')
-    .option('--uv-mode <mode>', 'UV decode mode: declared, auto, half2-be/le, u16norm2-be/le, s16norm2-be/le, float2-be/le', 'declared')
+    .option('--position-mode <mode>', 'Position decode mode', 'declared')
+    .option('--uv-mode <mode>', 'UV decode mode', 'declared')
     .option('--experimental-auto-decode', 'Allow experimental scored auto-decoding instead of stable declared defaults')
+    .option('--split-parts', 'Export each SCNE model part into its own OBJ/MTL pair for debugging')
     .option('--flip-v', 'Flip UV V coordinate during export')
     .option('--dump-raw-buffers', 'Dump raw vertex/index buffers alongside OBJ export')
     .action(async (scneFile, outputPath, options) => {
-        await scneObjExporter.exportScneObj(scneFile, outputPath, options);
+        if (options.splitParts) {
+            await splitPartExporter.exportScneSplitParts(scneFile, outputPath, options);
+        }
+        else {
+            await scneObjExporter.exportScneObj(scneFile, outputPath, options);
+        }
     });
 
 program.command('probe')
