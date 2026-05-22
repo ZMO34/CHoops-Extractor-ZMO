@@ -76,11 +76,15 @@ program.command('extract-cdf-textures')
     .option('--dump-full-records', 'Dump each full CDF texture record as .cdftex')
     .option('--dump-headers', 'Dump each parsed CDF texture header')
     .option('--no-dump-payloads', 'Do not dump raw payload files unless needed for DDS conversion')
+    .option('--scan-all', 'Brute-force scan the entire CDF for texture records')
+    .option('--verbose', 'Enable verbose debug logging')
     .action(async (cdfFile, outputPath, options) => {
         await cdfTextureExtractor.extractCdfTextureRecords(cdfFile, outputPath, {
             ...options,
             iffPath: options.iff,
-            convertDds: options.dds
+            convertDds: options.dds,
+            scanAll: options.scanAll,
+            verbose: options.verbose
         });
     });
 
