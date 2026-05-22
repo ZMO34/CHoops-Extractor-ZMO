@@ -12,6 +12,15 @@ function fourCc(value) {
     return Buffer.from(value, 'ascii').readUInt32LE(0);
 }
 
+function blockBytesFor(fourCC) {
+    return fourCC === 'DXT1' || fourCC === 'BC1 ' ? 8 : 16;
+}
+
+function topMipSizeFor(width, height, fourCC) {
+    const blockBytes = blockBytesFor(fourCC);
+    return Math.max(1, Math.ceil(width / 4)) * Math.max(1, Math.ceil(height / 4)) * blockBytes;
+}
+
 function makeDdsHeader({ width, height, fourCC, dataSize, mipMapCount = 1 }) {
     const header = Buffer.alloc(128, 0);
     DDS_MAGIC.copy(header, 0);
@@ -33,7 +42,7 @@ function makeDdsHeader({ width, height, fourCC, dataSize, mipMapCount = 1 }) {
 }
 
 function payloadSizeFor(width, height, fourCC, mipMapCount = 1) {
-    const blockBytes = fourCC === 'DXT1' || fourCC === 'BC1 ' ? 8 : 16;
+    const blockBytes = blockBytesFor(fourCC);
     let total = 0;
     let w = width;
     let h = height;
@@ -77,9 +86,74 @@ function parseDds(buffer) {
     };
 }
 
+function part1By1(value) {
+    let x = value & 0x0000ffff;
+    x = (x | (x << 8)) & 0x00ff00ff;
+    x = (x | (x << 4)) & 0x0f0f0f0f;
+    x = (x | (x << 2)) & 0x33333333;
+    x = (x | (x << 1)) & 0x55555555;
+    return x >>> 0;
+}
+
+function morton2D(x, y) {
+    return (part1By1(x) | (part1By1(y) << 1)) >>> 0;
+}
+
+function copyBlock(src, srcIndex, dst, dstIndex, blockBytes) {
+    const srcOffset = srcIndex * blockBytes;
+    const dstOffset = dstIndex * blockBytes;
+    if (srcOffset + blockBytes <= src.length && dstOffset + blockBytes <= dst.length) {
+        src.copy(dst, dstOffset, srcOffset, srcOffset + blockBytes);
+    }
+}
+
+function deswizzleBcTopMip(swizzledPayload, width, height, fourCC) {
+    const blockBytes = blockBytesFor(fourCC);
+    const blocksWide = Math.max(1, Math.ceil(width / 4));
+    const blocksHigh = Math.max(1, Math.ceil(height / 4));
+    const blockCount = blocksWide * blocksHigh;
+    const topMipSize = blockCount * blockBytes;
+    const src = swizzledPayload.slice(0, topMipSize);
+    const dst = Buffer.alloc(topMipSize, 0);
+
+    for (let y = 0; y < blocksHigh; y++) {
+        for (let x = 0; x < blocksWide; x++) {
+            const linearIndex = y * blocksWide + x;
+            const swizzledIndex = morton2D(x, y);
+            copyBlock(src, swizzledIndex, dst, linearIndex, blockBytes);
+        }
+    }
+
+    return dst;
+}
+
+function swizzleBcTopMip(linearPayload, width, height, fourCC) {
+    const blockBytes = blockBytesFor(fourCC);
+    const blocksWide = Math.max(1, Math.ceil(width / 4));
+    const blocksHigh = Math.max(1, Math.ceil(height / 4));
+    const blockCount = blocksWide * blocksHigh;
+    const topMipSize = blockCount * blockBytes;
+    const src = linearPayload.slice(0, topMipSize);
+    const dst = Buffer.alloc(topMipSize, 0);
+
+    for (let y = 0; y < blocksHigh; y++) {
+        for (let x = 0; x < blocksWide; x++) {
+            const linearIndex = y * blocksWide + x;
+            const swizzledIndex = morton2D(x, y);
+            copyBlock(src, linearIndex, dst, swizzledIndex, blockBytes);
+        }
+    }
+
+    return dst;
+}
+
 module.exports = {
     makeDdsHeader,
     wrapDds,
     parseDds,
-    payloadSizeFor
+    payloadSizeFor,
+    topMipSizeFor,
+    blockBytesFor,
+    deswizzleBcTopMip,
+    swizzleBcTopMip
 };
