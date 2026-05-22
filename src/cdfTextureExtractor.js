@@ -1,6 +1,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const mkdir = require('make-dir');
+const { spawnSync } = require('child_process');
 
 const CDF_TEXTURE_MAGIC = 0x0e4837c3;
 const DEFAULT_RECORD_HEADER_SIZE = 0xB0;
@@ -26,6 +27,72 @@ function getRecordIdFromHeader(buffer, offset) {
     // The matching IFF metadata ID is stored across CDF header bytes +0x15..+0x18.
     if (offset + 0x19 > buffer.length) return null;
     return buffer.readUInt32BE(offset + 0x15);
+}
+
+function getBundledToolPath(toolName) {
+    return path.join(__dirname, '..', '2k-tools', 'lib', toolName);
+}
+
+async function pathExists(inputPath) {
+    try {
+        await fs.access(inputPath);
+        return true;
+    }
+    catch (err) {
+        return false;
+    }
+}
+
+function runGtf2Dds(gtf2ddsPath, inputPath, outputPath) {
+    const attempts = [
+        [inputPath, outputPath],
+        ['-o', outputPath, inputPath],
+        [inputPath],
+    ];
+
+    const results = [];
+    for (const args of attempts) {
+        const result = spawnSync(gtf2ddsPath, args, {
+            cwd: path.dirname(inputPath),
+            windowsHide: true,
+            encoding: 'utf-8'
+        });
+
+        results.push({
+            args,
+            status: result.status,
+            signal: result.signal,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: result.error ? result.error.message : null
+        });
+
+        if (result.status === 0) {
+            return { success: true, attempts: results };
+        }
+    }
+
+    return { success: false, attempts: results };
+}
+
+async function convertCandidateToDds(gtf2ddsPath, candidatePath, ddsPath) {
+    const result = runGtf2Dds(gtf2ddsPath, candidatePath, ddsPath);
+
+    // Some versions of gtf2dds write next to the input using the same base name.
+    const sidecarDds = candidatePath.replace(/\.[^.]+$/, '.dds');
+    const finalExists = await pathExists(ddsPath);
+    const sidecarExists = await pathExists(sidecarDds);
+
+    if (!finalExists && sidecarExists && sidecarDds !== ddsPath) {
+        await fs.copyFile(sidecarDds, ddsPath);
+    }
+
+    return {
+        ...result,
+        outputExists: await pathExists(ddsPath),
+        candidatePath,
+        ddsPath
+    };
 }
 
 function parseCdfTextureRecords(buffer) {
@@ -188,29 +255,44 @@ async function extractCdfTextureRecords(cdfPath, outputPath, options = {}) {
 
     const mergedRecords = mergeMetadata(cdfRecords, iffInfo.records);
     const recordsDir = path.join(outputPath, 'records');
+    const ddsDir = path.join(outputPath, 'dds');
+    const gtfDir = path.join(outputPath, 'gtf_candidates');
     await mkdir(recordsDir);
 
     const dumpPayloads = options.dumpPayloads !== false && options.dumpPayloads !== 'false';
     const dumpFullRecords = options.dumpFullRecords === true || options.dumpFullRecords === 'true';
     const dumpHeaders = options.dumpHeaders === true || options.dumpHeaders === 'true';
+    const convertDds = options.convertDds === true || options.convertDds === 'true' || options.dds === true || options.dds === 'true';
+    const keepGtfCandidates = options.keepGtfCandidates === true || options.keepGtfCandidates === 'true';
+    const limit = options.limit ? Number.parseInt(options.limit, 10) : null;
+    const gtf2ddsPath = options.gtf2ddsPath || getBundledToolPath('gtf2dds.exe');
 
-    for (const record of mergedRecords) {
+    if (convertDds) {
+        await mkdir(ddsDir);
+        if (keepGtfCandidates) await mkdir(gtfDir);
+    }
+
+    const conversionResults = [];
+    const recordsToProcess = Number.isInteger(limit) && limit > 0 ? mergedRecords.slice(0, limit) : mergedRecords;
+
+    for (const record of recordsToProcess) {
         const recordName = `${String(record.index).padStart(4, '0')}_${safeName(record.recordIdHex)}`;
         const recordDir = path.join(recordsDir, recordName);
         await mkdir(recordDir);
 
-        if (dumpPayloads) {
-            await fs.writeFile(
-                path.join(recordDir, `${recordName}.payload.bin`),
-                cdfBuffer.slice(record.payloadOffset, record.nextOffset)
-            );
+        const payloadBuffer = cdfBuffer.slice(record.payloadOffset, record.nextOffset);
+        const fullRecordBuffer = cdfBuffer.slice(record.offset, record.nextOffset);
+        const payloadPath = path.join(recordDir, `${recordName}.payload.bin`);
+        const fullRecordPath = path.join(recordDir, `${recordName}.cdftex`);
+        const payloadAsGtfPath = path.join(recordDir, `${recordName}.payload.gtf`);
+        const fullRecordAsGtfPath = path.join(recordDir, `${recordName}.record.gtf`);
+
+        if (dumpPayloads || convertDds) {
+            await fs.writeFile(payloadPath, payloadBuffer);
         }
 
-        if (dumpFullRecords) {
-            await fs.writeFile(
-                path.join(recordDir, `${recordName}.cdftex`),
-                cdfBuffer.slice(record.offset, record.nextOffset)
-            );
+        if (dumpFullRecords || convertDds) {
+            await fs.writeFile(fullRecordPath, fullRecordBuffer);
         }
 
         if (dumpHeaders) {
@@ -220,7 +302,45 @@ async function extractCdfTextureRecords(cdfPath, outputPath, options = {}) {
             );
         }
 
-        await fs.writeFile(path.join(recordDir, `${recordName}.json`), JSON.stringify(record, null, 2));
+        const recordManifest = { ...record };
+
+        if (convertDds) {
+            await fs.writeFile(payloadAsGtfPath, payloadBuffer);
+            await fs.writeFile(fullRecordAsGtfPath, fullRecordBuffer);
+
+            const ddsPayloadPath = path.join(ddsDir, `${recordName}.payload.dds`);
+            const ddsRecordPath = path.join(ddsDir, `${recordName}.record.dds`);
+            const payloadConversion = await convertCandidateToDds(gtf2ddsPath, payloadAsGtfPath, ddsPayloadPath);
+            const recordConversion = payloadConversion.outputExists
+                ? null
+                : await convertCandidateToDds(gtf2ddsPath, fullRecordAsGtfPath, ddsRecordPath);
+
+            recordManifest.ddsConversion = {
+                gtf2ddsPath,
+                payloadConversion,
+                recordConversion,
+                converted: payloadConversion.outputExists || (recordConversion && recordConversion.outputExists),
+                outputDds: payloadConversion.outputExists
+                    ? ddsPayloadPath
+                    : (recordConversion && recordConversion.outputExists ? ddsRecordPath : null)
+            };
+            conversionResults.push({
+                index: record.index,
+                recordIdHex: record.recordIdHex,
+                ...recordManifest.ddsConversion
+            });
+
+            if (keepGtfCandidates) {
+                await fs.copyFile(payloadAsGtfPath, path.join(gtfDir, `${recordName}.payload.gtf`));
+                await fs.copyFile(fullRecordAsGtfPath, path.join(gtfDir, `${recordName}.record.gtf`));
+            }
+            else {
+                await fs.rm(payloadAsGtfPath, { force: true });
+                await fs.rm(fullRecordAsGtfPath, { force: true });
+            }
+        }
+
+        await fs.writeFile(path.join(recordDir, `${recordName}.json`), JSON.stringify(recordManifest, null, 2));
     }
 
     const manifest = {
@@ -230,15 +350,23 @@ async function extractCdfTextureRecords(cdfPath, outputPath, options = {}) {
         parser: 'cdf-texture-records-v1',
         fileSize: cdfBuffer.length,
         recordCount: mergedRecords.length,
+        processedRecordCount: recordsToProcess.length,
         iffMetadataOffset: iffInfo.metadataOffset,
         iffMetadataCount: iffInfo.records.length,
         matchedIffMetadataCount: mergedRecords.filter((record) => record.iffMetadataMatched).length,
+        convertDds,
+        conversionSummary: convertDds ? {
+            gtf2ddsPath,
+            convertedCount: conversionResults.filter((result) => result.converted).length,
+            failedCount: conversionResults.filter((result) => !result.converted).length
+        } : null,
         notes: [
             'teamselectlogo.cdf is a sequential CDF texture-record container, not fully encrypted.',
             'Each parsed record starts with magic 0x0e4837c3 and uses a 0xB0-byte CDF texture header.',
             'The corresponding IFF contains a 20-byte-per-record metadata table with matching record IDs.',
-            'Payloads are currently dumped as raw CDF texture payloads; DDS/GTF conversion is a separate next step.'
+            'DDS conversion tries both the raw payload and the full CDF texture record as GTF candidates; failures preserve raw payloads for wrapper refinement.'
         ],
+        conversionResults,
         records: mergedRecords
     };
 
