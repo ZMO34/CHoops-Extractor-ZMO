@@ -99,6 +99,24 @@ function morton2D(x, y) {
     return (part1By1(x) | (part1By1(y) << 1)) >>> 0;
 }
 
+function mortonRectIndex(x, y, width, height) {
+    const logW = Math.round(Math.log2(width));
+    const logH = Math.round(Math.log2(height));
+    const sharedBits = Math.min(logW, logH);
+    const lowMask = (1 << sharedBits) - 1;
+    const base = morton2D(x & lowMask, y & lowMask);
+
+    if (logW > logH) {
+        return ((x >> sharedBits) << (sharedBits * 2)) | base;
+    }
+
+    if (logH > logW) {
+        return ((y >> sharedBits) << (sharedBits * 2)) | base;
+    }
+
+    return base;
+}
+
 function copyBlock(src, srcIndex, dst, dstIndex, blockBytes) {
     const srcOffset = srcIndex * blockBytes;
     const dstOffset = dstIndex * blockBytes;
@@ -119,6 +137,26 @@ function transformBcTopMip(inputPayload, width, height, fourCC, mode, direction)
         return Buffer.from(src);
     }
 
+    if (mode === 'byte-rect') {
+        const rowBytes = blocksWide * blockBytes;
+        const dst = Buffer.alloc(topMipSize, 0);
+        for (let y = 0; y < blocksHigh; y++) {
+            for (let x = 0; x < rowBytes; x++) {
+                const linearIndex = y * rowBytes + x;
+                const swizzledIndex = mortonRectIndex(x, y, rowBytes, blocksHigh);
+                if (swizzledIndex < src.length) {
+                    if (direction === 'deswizzle') {
+                        dst[linearIndex] = src[swizzledIndex];
+                    }
+                    else {
+                        dst[swizzledIndex] = src[linearIndex];
+                    }
+                }
+            }
+        }
+        return dst;
+    }
+
     const dst = Buffer.alloc(topMipSize, 0);
     for (let y = 0; y < blocksHigh; y++) {
         for (let x = 0; x < blocksWide; x++) {
@@ -127,6 +165,9 @@ function transformBcTopMip(inputPayload, width, height, fourCC, mode, direction)
 
             if (mode === 'morton-yx') {
                 swizzledIndex = morton2D(y, x);
+            }
+            else if (mode === 'block-rect') {
+                swizzledIndex = mortonRectIndex(x, y, blocksWide, blocksHigh);
             }
             else {
                 swizzledIndex = morton2D(x, y);
