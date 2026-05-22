@@ -95,9 +95,12 @@ program.command('export-teamselectlogo-dds')
     .argument('<iff file>', 'Path to teamselectlogo.iff')
     .argument('<output path>', 'Output folder for editable DDS files')
     .option('--verbose', 'Enable verbose logging')
-    .option('--swizzle-mode <mode>', 'Image block mode: none, morton, or morton-yx', 'none')
-    .option('--image-data-offset <number>', 'Override byte offset inside each payload where image data begins')
-    .option('--dump-variants', 'Export none/morton/morton-yx DDS variants for comparison')
+    .option('--export-mode <mode>', 'Export mode: gtf or manual', 'gtf')
+    .option('--gtf2dds-path <path>', 'Override path to gtf2dds.exe')
+    .option('--keep-gtf', 'Keep synthesized .gtf files next to the DDS export')
+    .option('--swizzle-mode <mode>', 'Manual mode image block mode: none, morton, morton-yx, block-rect, or byte-rect', 'block-rect')
+    .option('--image-data-offset <number>', 'Manual mode override for byte offset inside each CDF record where image data begins')
+    .option('--dump-variants', 'Manual mode: export none/morton/morton-yx/block-rect/byte-rect DDS variants for comparison')
     .action(async (cdfFile, iffFile, outputPath, options) => {
         await teamselectlogoTool.exportTeamselectlogo(
             cdfFile,
