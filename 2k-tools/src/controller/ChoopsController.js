@@ -105,12 +105,25 @@ class ChoopsController extends EventEmitter {
         }
 
         if (offset + length > stats.size) {
-            throw new Error(
-                `Invalid read window for ${filePath}. `
-                + `offset=0x${offset.toString(16)}, length=0x${length.toString(16)}, `
-                + `fileSize=0x${stats.size.toString(16)}`
+            const remainingSize = stats.size - offset;
+
+            console.warn(
+                `[WARN] Clamping invalid archive read for ${filePath}: `
+                + `offset=0x${offset.toString(16)}, `
+                + `requestedLength=0x${length.toString(16)}, `
+                + `remainingLength=0x${remainingSize.toString(16)}`
             );
+
+            return {
+                length: remainingSize,
+                offset
+            };
         }
+
+        return {
+            length,
+            offset
+        };
     };
 
     async read(options) {
@@ -136,31 +149,8 @@ class ChoopsController extends EventEmitter {
 
                 this.cache.tocCache = this.cache.tocCache.map((rawCacheEntry) => {
                     let cacheEntry = new ChoopsCacheEntry();
-                    cacheEntry.id = rawCacheEntry.id;
-                    cacheEntry.size = rawCacheEntry.size;
-                    cacheEntry.nameHash = rawCacheEntry.nameHash;
-                    cacheEntry.name = rawCacheEntry.name;
-                    cacheEntry.rawOffset = rawCacheEntry.rawOffset;
-                    cacheEntry.offset = rawCacheEntry.offset;
-                    cacheEntry.location = rawCacheEntry.location;
-                    cacheEntry.isSplit = rawCacheEntry.isSplit;
-                    cacheEntry.splitSecondFileSize = rawCacheEntry.splitSecondFileSize;
-                    cacheEntry.sizeWasDerived = rawCacheEntry.sizeWasDerived;
-                    cacheEntry.storedSize = rawCacheEntry.storedSize;
-                    cacheEntry.derivedSize = rawCacheEntry.derivedSize;
-                    cacheEntry.sizeDerivationReason = rawCacheEntry.sizeDerivationReason;
+                    Object.assign(cacheEntry, rawCacheEntry);
                     this._normalizeArchiveEntry(cacheEntry);
-                    
-                    cacheEntry.original.id = rawCacheEntry.original.id;
-                    cacheEntry.original.size = rawCacheEntry.original.size;
-                    cacheEntry.original.nameHash = rawCacheEntry.original.nameHash;
-                    cacheEntry.original.name = rawCacheEntry.original.name;
-                    cacheEntry.original.rawOffset = rawCacheEntry.original.rawOffset;
-                    cacheEntry.original.offset = rawCacheEntry.original.offset;
-                    cacheEntry.original.location = rawCacheEntry.original.location;
-                    cacheEntry.original.isSplit = rawCacheEntry.original.isSplit;
-                    cacheEntry.original.splitSecondFileSize = rawCacheEntry.original.splitSecondFileSize;
-
                     return cacheEntry;
                 });
 
@@ -188,19 +178,14 @@ class ChoopsController extends EventEmitter {
         }.bind(this));
 
         this.parser.on('chunk', async function (data) {
-            cachePromises.push(new Promise(async (resolve, reject) => {
+            cachePromises.push(new Promise(async (resolve) => {
                 let cacheEntry = new ChoopsCacheEntry();
                 cacheEntry.id = data.meta.id;
                 cacheEntry.size = data.meta.size;
                 cacheEntry.nameHash = data.meta.nameHash;
 
                 const name = await hashUtil.hashLookup(cacheEntry.nameHash);
-                if (!name) {
-                    cacheEntry.name = data.meta.id.toString();
-                }
-                else {
-                    cacheEntry.name = name.str;
-                }
+                cacheEntry.name = name ? name.str : data.meta.id.toString();
 
                 cacheEntry.rawOffset = data.meta.rawOffset;
                 cacheEntry.offset = data.meta.archiveOffset;
@@ -211,31 +196,29 @@ class ChoopsController extends EventEmitter {
                 cacheEntry.storedSize = data.meta.storedSize;
                 cacheEntry.derivedSize = data.meta.derivedSize;
                 cacheEntry.sizeDerivationReason = data.meta.sizeDerivationReason;
+
                 this._normalizeArchiveEntry(cacheEntry);
-    
                 cacheEntry.setCurrentDataAsOriginal();
+
                 resolve(cacheEntry);
             }));
         }.bind(this));
 
         const gameFilePaths = await gameFileUtil.getGameFilePaths(this.gameDirectoryPath);
-        const gameReadStreams = gameFilePaths.map((gameFilePath) => {
-            return fs.createReadStream(gameFilePath);
-        });
+        const gameReadStreams = gameFilePaths.map((gameFilePath) => fs.createReadStream(gameFilePath));
 
         await new Promise((resolve, reject) => {
             pipeline(
                 new Multistream(gameReadStreams),
                 this.parser,
                 (err) => {
-                    if (err) { reject(err); }
-                    else { resolve(); }
+                    if (err) reject(err);
+                    else resolve();
                 }
             );
         });
 
-        const cacheEntries = await Promise.all(cachePromises);
-        this.data = cacheEntries;
+        this.data = await Promise.all(cachePromises);
     };
 
     async _buildCache() {
@@ -262,9 +245,7 @@ class ChoopsController extends EventEmitter {
     };
 
     getEntryByName(name) {
-        const entry = this.data.find((entry) => {
-            return entry.name.toLowerCase() === name.toLowerCase();
-        });
+        const entry = this.data.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
 
         if (!entry) {
             throw new Error(`Cannot find a resource in the cache with name ${name}.`);
@@ -274,52 +255,30 @@ class ChoopsController extends EventEmitter {
     };
 
     async getFileRawData(name) {
-        if (!name) { throw new Error('getResourceData() takes in a mandatory `name` parameter.'); }
-        if (!this.data) { throw new Error('No data loaded. You must call the `read` function before calling this function.'); }
+        const entry = this.getEntryByName(name);
+        const validatedRead = this._validateReadParameters(entry.size, entry.offset, name);
+
+        let entryBuf = Buffer.alloc(validatedRead.length);
+        const entryPath = await gameFileUtil.getGameFilePathByIndex(this.gameDirectoryPath, entry.location);
 
         this.progressTracker.reset();
         this.progressTracker.totalSteps = 2;
-        this._emitProgress(this.progressTracker.format('Searching for entry in cache...'));
-
-        const entry = this.getEntryByName(name);
-        const validatedRead = this._validateReadParameters(entry.size, entry.offset, name);
-        
-        let entryBuf = Buffer.alloc(validatedRead.length);
-        const entryPath = await gameFileUtil.getGameFilePathByIndex(this.gameDirectoryPath, entry.location);
 
         this.progressTracker.step();
         this._emitProgress(this.progressTracker.format(`Reading resource from path: ${entryPath} @ offset 0x${validatedRead.offset.toString(16)}.`));
 
         await this._openAndReadFile(entryPath, entryBuf, validatedRead.length, validatedRead.offset);
 
-        if (entry.isSplit) {
-            const splitValidatedRead = this._validateReadParameters(
-                entry.splitSecondFileSize,
-                0,
-                `${name} (split archive)`
-            );
-            let entryBuf2 = Buffer.alloc(splitValidatedRead.length);
-            const entryPath2 = await gameFileUtil.getGameFilePathByIndex(this.gameDirectoryPath, entry.location + 1);
-
-            this.progressTracker.totalSteps += 1;
-            this.progressTracker.step();
-            this._emitProgress(this.progressTracker.format(`Data is split between two files. Continuing to read from path: ${entryPath2} @ offset 0x0.`));
-
-            await this._openAndReadFile(entryPath2, entryBuf2, splitValidatedRead.length, 0);
-
-            entryBuf = entryBuf.slice(0, validatedRead.length - splitValidatedRead.length);
-            entryBuf = Buffer.concat([entryBuf, entryBuf2]);
-        }
-
-        this.progressTracker.step();
-        this._emitProgress(this.progressTracker.format('Done reading resource.'));
-
         return entryBuf;
     };
 
     async _openAndReadFile(pathName, buf, length, offset) {
         const validatedRead = this._validateReadParameters(length, offset, pathName);
-        await this._validateReadWindow(pathName, validatedRead.length, validatedRead.offset);
+        const validatedWindow = await this._validateReadWindow(
+            pathName,
+            validatedRead.length,
+            validatedRead.offset
+        );
 
         const fd = await fsPromies.open(pathName, 'r');
 
@@ -327,8 +286,8 @@ class ChoopsController extends EventEmitter {
             await fd.read({
                 buffer: buf,
                 offset: 0,
-                length: validatedRead.length,
-                position: validatedRead.offset
+                length: validatedWindow.length,
+                position: validatedWindow.offset
             });
         }
         finally {
@@ -338,15 +297,18 @@ class ChoopsController extends EventEmitter {
 
     async getFileController(name) {
         let entry = this.getEntryByName(name);
-        if (entry.controller) { return entry.controller; }
-        
+        if (entry.controller) {
+            return entry.controller;
+        }
+
         const resourceRawData = await this.getFileRawData(name);
+
         if (resourceRawData.readUInt32BE(0) === 0xFF3BEF94) {
             const resourceDataStream = Readable.from(resourceRawData);
-    
+
             this.progressTracker.totalSteps += 1;
             this._emitProgress(this.progressTracker.format('Parsing IFF...'));
-    
+
             let controller = await new Promise((resolve, reject) => {
                 const parser = new IFFReader();
                 let pendingFilePromises = [];
@@ -355,36 +317,34 @@ class ChoopsController extends EventEmitter {
                     pendingFilePromises.push((async () => {
                         if (file.type === IFFType.TYPES.UNKNOWN && file.typeRaw) {
                             const type = await hashUtil.hashLookup(file.typeRaw);
-                            
+
                             if (type) {
                                 file.type = IFFType.stringToType(type.str);
                             }
                         }
                     })());
                 });
-    
-                pipeline(
-                    resourceDataStream,
-                    parser,
-                    async (err) => {
-                        if (err) reject(err);
-                        else {
-                            await Promise.all(pendingFilePromises);
-                            resolve(parser.controller);
-                        }
+
+                pipeline(resourceDataStream, parser, async (err) => {
+                    if (err) {
+                        reject(err);
                     }
-                )
+                    else {
+                        await Promise.all(pendingFilePromises);
+                        resolve(parser.controller);
+                    }
+                });
             });
-    
+
             entry.controller = controller;
-            
+
             this.progressTracker.step();
             this._emitProgress(this.progressTracker.format('Done parsing IFF.'));
+
             return controller;
         }
-        else {
-            return resourceRawData;
-        }
+
+        return resourceRawData;
     };
 
     async repack(saveCache) {
@@ -410,19 +370,18 @@ class ChoopsController extends EventEmitter {
         archiveCacheEntry.isSplit = entry.isSplit;
         archiveCacheEntry.splitSecondFileSize = entry.splitSecondFileSize;
 
-        delete entry.controller; 
+        delete entry.controller;
     };
 
     async revertAll() {
-        try {
-            const reverted = await this._archiveWriter.revertAll();
-            
-            this.cache = await cacheUtil.getCache(cacheUtil.CACHES.CHOOPS.cache, path.join(__dirname, '../data/choops/ch2k8_default.cache'));
-            await this._saveCache();
-        }
-        catch (err) {
-            throw err;
-        }
+        const reverted = await this._archiveWriter.revertAll();
+
+        this.cache = await cacheUtil.getCache(
+            cacheUtil.CACHES.CHOOPS.cache,
+            path.join(__dirname, '../data/choops/ch2k8_default.cache')
+        );
+
+        await this._saveCache();
     };
 
     _emitProgress(message) {
