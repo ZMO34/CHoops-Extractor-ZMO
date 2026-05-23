@@ -24,6 +24,7 @@ program.command('rip')
     .argument('<path to game files>', 'Path to Choops game files directory (must include USRDIR in path)')
     .argument('<output path>', 'Path to output the game files')
     .option('-c, --cache', 'Force cache rebuild')
+    .option('--build-cache', 'Compatibility alias for --cache')
     .option('-i, --index <number>', 'IFF file to rip (by index)')
     .option('-f, --file <string>', 'IFF file to rip (by name, include .iff on the end)')
     .option('--iff-only', 'Only rip IFFs, do not rip individual files within them')
@@ -35,6 +36,10 @@ program.command('rip')
     .option('--raw-type', 'Output the subfile as it is in the IFF. Will not process the type (Ex: Textures will not output as DDS).')
     .option('--game-name <gameName>', 'Specify which game you are ripping (valid values are: choops2k8, nba2k8, nba2k9)')
     .action(async (inputPath, outputPath, options) => {
+        if (options.buildCache) {
+            options.cache = true;
+        }
+
         await ripper(inputPath, outputPath, options);
     });
 
