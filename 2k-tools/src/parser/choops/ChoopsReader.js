@@ -76,16 +76,33 @@ class ChoopsReader extends FileParser {
             const nextEntry = this.archive.toc[i + 1];
             const nextOffset = nextEntry ? nextEntry.offset : totalArchiveSize;
             const derivedSize = nextOffset - tocEntry.offset;
-            const currentSize = Number(tocEntry.size);
+            const storedSize = Number(tocEntry.size);
+
+            tocEntry.storedSize = storedSize;
+            tocEntry.derivedSize = derivedSize;
+            tocEntry.sizeWasDerived = false;
+            tocEntry.sizeDerivationReason = null;
+
             const impossibleSize = (
-                !Number.isFinite(currentSize)
-                || currentSize <= 0
-                || tocEntry.offset + currentSize > totalArchiveSize
-                || currentSize > derivedSize
+                !Number.isFinite(storedSize)
+                || storedSize <= 0
+                || tocEntry.offset < 0
+                || tocEntry.offset >= totalArchiveSize
+                || tocEntry.offset + storedSize > totalArchiveSize
+                || (derivedSize > 0 && storedSize > derivedSize)
             );
 
-            if (derivedSize > 0 && impossibleSize) {
-                tocEntry.size = derivedSize;
+            if (impossibleSize) {
+                if (derivedSize > 0 && tocEntry.offset + derivedSize <= totalArchiveSize) {
+                    tocEntry.size = derivedSize;
+                    tocEntry.sizeWasDerived = true;
+                    tocEntry.sizeDerivationReason = 'stored size exceeded adjacent TOC/end-of-archive boundary';
+                }
+                else {
+                    tocEntry.size = 0;
+                    tocEntry.sizeWasDerived = true;
+                    tocEntry.sizeDerivationReason = 'stored size invalid and no safe adjacent TOC boundary existed';
+                }
             }
 
             const archiveDetails = this._getArchiveDetailsFromOffset(tocEntry.offset, tocEntry.size);
@@ -204,7 +221,8 @@ class ChoopsReader extends FileParser {
     };
 
     _skipToChunkAtIndex(index) {
-        const bytesToSkip = (this.archive.toc[index].rawOffset * this.archive.alignment) - this.currentBufferIndex;
+        const tocEntry = this.archive.toc[index];
+        const bytesToSkip = tocEntry.offset - this.currentBufferIndex;
 
         if (bytesToSkip > 0) {
             this.skipBytes(bytesToSkip, function () {
@@ -217,7 +235,20 @@ class ChoopsReader extends FileParser {
     };
 
     _readChunk(index) {
-        this.bytes(this.archive.toc[index].size, function (buf) {
+        const tocEntry = this.archive.toc[index];
+        const totalArchiveSize = this._getTotalArchiveSize();
+        const size = Number(tocEntry.size);
+
+        if (!Number.isFinite(size) || size <= 0 || tocEntry.offset + size > totalArchiveSize) {
+            throw new Error(
+                `Refusing to read invalid TOC chunk size. `
+                + `index=${index}, offset=0x${tocEntry.offset.toString(16)}, `
+                + `size=${size}, storedSize=${tocEntry.storedSize}, derivedSize=${tocEntry.derivedSize}, `
+                + `totalArchiveSize=0x${totalArchiveSize.toString(16)}`
+            );
+        }
+
+        this.bytes(size, function (buf) {
             return this._onChunk(buf, index);
         });
     };
