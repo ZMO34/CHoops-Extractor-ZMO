@@ -53,7 +53,6 @@ class ChoopsReader extends FileParser {
         for (let i = 0; i < this.archive.numberOfArchives; i++) {
             const archive = new Archive();
             archive.sizeRaw = BigInt(buf.readUInt32BE(currentOffset));
-            // archive.zero = buf.readUInt32BE(currentOffset + 4);
             archive.name = buf.toString('utf8', currentOffset + 8, currentOffset + 16);
             
             this.archive.archives.push(archive);
@@ -61,6 +60,40 @@ class ChoopsReader extends FileParser {
         }
 
         this.bytes(this.archive.numberOfFiles * this.tocEntrySize, this._onToc);
+    };
+
+    _getTotalArchiveSize() {
+        return this.archive.archives.reduce((sum, archive) => {
+            return sum + Number(archive.size);
+        }, 0);
+    };
+
+    _deriveTocSizesFromOffsets() {
+        const totalArchiveSize = this._getTotalArchiveSize();
+
+        for (let i = 0; i < this.archive.toc.length; i++) {
+            const tocEntry = this.archive.toc[i];
+            const nextEntry = this.archive.toc[i + 1];
+            const nextOffset = nextEntry ? nextEntry.offset : totalArchiveSize;
+            const derivedSize = nextOffset - tocEntry.offset;
+            const currentSize = Number(tocEntry.size);
+            const impossibleSize = (
+                !Number.isFinite(currentSize)
+                || currentSize <= 0
+                || tocEntry.offset + currentSize > totalArchiveSize
+                || currentSize > derivedSize
+            );
+
+            if (derivedSize > 0 && impossibleSize) {
+                tocEntry.size = derivedSize;
+            }
+
+            const archiveDetails = this._getArchiveDetailsFromOffset(tocEntry.offset, tocEntry.size);
+            tocEntry.archiveIndex = archiveDetails.index;
+            tocEntry.archiveOffset = archiveDetails.offset;
+            tocEntry.isSplit = archiveDetails.isSplit;
+            tocEntry.splitSecondFileSize = archiveDetails.splitSecondFileSize;
+        }
     };
 
     _onToc(buf) {
@@ -82,21 +115,8 @@ class ChoopsReader extends FileParser {
             }
 
             if (!this.archiveConfig.zero) {
-                // NBA 2K8 header: only 12 bytes each, size multiplied by alignment as well as offset
                 tocEntry.size *= this.archive.alignment;
             }
-
-            // tocEntry.nameHash = buf.readUInt32BE(currentOffset + this.archiveConfig.toc.nameHash.offset);
-            // tocEntry.rawOffset = buf.readUInt32BE(currentOffset + this.archiveConfig.toc.rawOffset.offset);
-            // tocEntry.offset = tocEntry.rawOffset * this.archive.alignment;
-            // tocEntry.zero = buf.readUInt32BE(currentOffset + this.archiveConfig.toc.zero.offset);
-            // tocEntry.size = buf.readUInt32BE(currentOffset + this.archiveConfig.toc.size.offset);
-
-            const archiveDetails = this._getArchiveDetailsFromOffset(tocEntry.offset, tocEntry.size);
-            tocEntry.archiveIndex = archiveDetails.index;
-            tocEntry.archiveOffset = archiveDetails.offset;
-            tocEntry.isSplit = archiveDetails.isSplit;
-            tocEntry.splitSecondFileSize = archiveDetails.splitSecondFileSize;
 
             this.archive.toc.push(tocEntry);
             currentOffset += this.tocEntrySize;
@@ -105,6 +125,8 @@ class ChoopsReader extends FileParser {
         this.archive.toc.sort((a, b) => {
             return a.offset - b.offset;
         });
+
+        this._deriveTocSizesFromOffsets();
 
         if (this.offsetsToExtract && this.offsetsToExtract.length > 0) {
             this.archive.toc = this.archive.toc.filter(function (toc) {
@@ -156,15 +178,17 @@ class ChoopsReader extends FileParser {
         let splitSecondFileSize = 0;
 
         for (let i = 0; i < this.archive.archives.length; i++) {
-            runningOffset += Number(this.archive.archives[i].size);
+            const archiveSize = Number(this.archive.archives[i].size);
+            const archiveStart = runningOffset;
+            runningOffset += archiveSize;
 
             if (offset < runningOffset) {
                 archiveFileIndex = i;
-                archiveOffset = offset - (runningOffset - Number(this.archive.archives[i].size));
+                archiveOffset = offset - archiveStart;
 
-                if (archiveOffset + size > runningOffset) {
+                if (archiveOffset + size > archiveSize) {
                     isSplit = true;
-                    splitSecondFileSize = size - (runningOffset - archiveOffset);
+                    splitSecondFileSize = (archiveOffset + size) - archiveSize;
                 }
                 
                 break;
