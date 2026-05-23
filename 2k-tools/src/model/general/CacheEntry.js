@@ -15,39 +15,18 @@ class CacheEntry {
         this.location = null;
         this.isSplit = false;
         this.splitSecondFileSize = 0;
+        this.rawOffset = 0;
     };
 
-    set size(value) {
-        this._size = normalizeUnsigned32(value);
-    };
-
-    get size() {
-        return this._size || 0;
-    };
-
-    set offset(value) {
-        this._offset = normalizeUnsigned32(value);
-    };
-
-    get offset() {
-        return this._offset || 0;
-    };
-
-    set rawOffset(value) {
-        this._rawOffset = normalizeUnsigned32(value);
-    };
-
-    get rawOffset() {
-        return this._rawOffset || 0;
-    };
-
-    set splitSecondFileSize(value) {
-        this._splitSecondFileSize = normalizeUnsigned32(value);
-    };
-
-    get splitSecondFileSize() {
-        return this._splitSecondFileSize || 0;
+    normalizeArchiveFields() {
+        this.size = normalizeUnsigned32(this.size);
+        this.offset = normalizeUnsigned32(this.offset);
+        this.rawOffset = normalizeUnsigned32(this.rawOffset);
+        this.splitSecondFileSize = normalizeUnsigned32(this.splitSecondFileSize);
+        return this;
     };
 };
+
+CacheEntry.normalizeUnsigned32 = normalizeUnsigned32;
 
 module.exports = CacheEntry
