@@ -5,6 +5,7 @@ const path = require('path');
 const ProgressTracker = require('../util/ProgressTracker');
 const gameFileUtil = require('../util/choops/choopsGameFileUtil');
 const hashUtil = require('../util/hashUtil');
+const CacheEntry = require('../model/general/CacheEntry');
 
 const IFFReader = require('../parser/iff/IFFReader');
 const IFFType = require('../model/iff/IFFType');
@@ -23,7 +24,23 @@ class ChoopsController {
     };
 
     getEntryByName(name) {
-        return this.entries.find((entry) => entry.name === name);
+        const entry = this.entries.find((entry) => entry.name === name);
+
+        if (!entry) {
+            return null;
+        }
+
+        if (typeof entry.normalizeArchiveFields === 'function') {
+            entry.normalizeArchiveFields();
+        }
+        else {
+            entry.size = CacheEntry.normalizeUnsigned32(entry.size);
+            entry.offset = CacheEntry.normalizeUnsigned32(entry.offset);
+            entry.rawOffset = CacheEntry.normalizeUnsigned32(entry.rawOffset || 0);
+            entry.splitSecondFileSize = CacheEntry.normalizeUnsigned32(entry.splitSecondFileSize || 0);
+        }
+
+        return entry;
     };
 
     _normalizeUnsigned32(value) {
