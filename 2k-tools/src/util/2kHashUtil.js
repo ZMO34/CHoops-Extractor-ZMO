@@ -5,9 +5,10 @@ const fs = require('fs/promises');
 const heapUtil = require('./choops/choopsHeapUtil.js');
 
 let heapData, hashLookup;
+let generatedHashMapPromise = null;
 
 module.exports.heapPromise = new Promise(async (resolve, reject) => {
-    heapData = await heapUtil.getHeap()
+    heapData = await heapUtil.getHeap();
     resolve();
 });
 
@@ -49,26 +50,6 @@ function rldic(theLong, shift, maskBit) {
     return theLong.rotateLeft(shift).and(new Long(0xFFFFFFFF, 0xFFFFFFFF, true).shiftRightUnsigned(maskBit + shift).shiftLeft(shift));
 };
 
-async function persistLookup(str, hash) {
-    const existing = hashLookup.find(item => {
-        return item.hash === hash;
-    });
-
-    if (existing) {
-        return existing;
-    }
-
-    const newEntry = {
-        hash,
-        str
-    };
-
-    hashLookup.push(newEntry);
-    hashLookup.sort((a, b) => a.hash - b.hash || String(a.str).localeCompare(String(b.str)));
-
-    return newEntry;
-};
-
 function addNameVariants(candidates, baseName, extensions = ['.iff']) {
     candidates.add(baseName);
 
@@ -93,6 +74,30 @@ function generateCandidateNames() {
     }
 
     return [...candidates];
+};
+
+async function getGeneratedHashMap() {
+    if (!generatedHashMapPromise) {
+        generatedHashMapPromise = (async () => {
+            const map = new Map();
+
+            for (const candidate of generateCandidateNames()) {
+                const candidateHash = await module.exports.hash(candidate);
+
+                if (!map.has(candidateHash)) {
+                    map.set(candidateHash, {
+                        hash: candidateHash,
+                        str: candidate,
+                        generated: true
+                    });
+                }
+            }
+
+            return map;
+        })();
+    }
+
+    return generatedHashMapPromise;
 };
 
 module.exports.generateCandidateNames = generateCandidateNames;
@@ -121,13 +126,17 @@ module.exports.resolveCandidateName = async function(candidateName) {
             return existing;
         }
 
-        return await persistLookup(name, hash);
+        return {
+            hash,
+            str: name,
+            generated: true
+        };
     }
 
     return null;
 };
 
-module.exports.hashLookup = async function(hash) {
+module.exports.hashLookup = async function(hash, options = {}) {
     await this.hashLookupPromise;
 
     const existing = hashLookup.find(item => {
@@ -138,15 +147,16 @@ module.exports.hashLookup = async function(hash) {
         return existing;
     }
 
-    const candidates = generateCandidateNames();
+    if (!options.allowGenerated) {
+        return null;
+    }
 
-    for (const candidate of candidates) {
-        const generatedHash = await this.hash(candidate);
+    const generatedHashMap = await getGeneratedHashMap();
+    const generated = generatedHashMap.get(hash);
 
-        if (generatedHash === hash) {
-            console.log(`Auto-resolved hash 0x${hash.toString(16)} -> ${candidate}`);
-            return await persistLookup(candidate, hash);
-        }
+    if (generated) {
+        console.log(`Auto-resolved hash 0x${hash.toString(16)} -> ${generated.str}`);
+        return generated;
     }
 
     return null;
