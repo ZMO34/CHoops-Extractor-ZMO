@@ -10,6 +10,86 @@ class ChoopsTextureReader {
         this.tempDir = options.tempDir || path.join(process.cwd(), '_choops_texture_temp');
     };
 
+    _readUInt16BE(buf, offset, fallback = 0) {
+        if (!buf || offset + 2 > buf.length) { return fallback; }
+        return buf.readUInt16BE(offset);
+    };
+
+    _readUInt32BE(buf, offset, fallback = 0) {
+        if (!buf || offset + 4 > buf.length) { return fallback; }
+        return buf.readUInt32BE(offset);
+    };
+
+    _isSingleBlockAtlasTexture(file) {
+        if (!file || !file.dataBlocks || file.dataBlocks.length !== 1) {
+            return false;
+        }
+
+        const data = file.dataBlocks[0].data;
+        if (!data || data.length < 0xB0) {
+            return false;
+        }
+
+        const format = data.readUInt8(0x58);
+        const width = this._readUInt16BE(data, 0x64);
+        const height = this._readUInt16BE(data, 0x66);
+        const textureLength = this._readUInt32BE(data, 0xA8);
+
+        return format === 0xA1
+            && width > 0
+            && height > 0
+            && textureLength > 0
+            && 0xB0 + textureLength <= data.length;
+    };
+
+    _getSingleBlockAtlasInfo(file) {
+        const data = file.dataBlocks[0].data;
+        return {
+            format: data.readUInt8(0x58),
+            width: this._readUInt16BE(data, 0x64),
+            height: this._readUInt16BE(data, 0x66),
+            textureLength: this._readUInt32BE(data, 0xA8),
+            textureOffset: 0xB0
+        };
+    };
+
+    _buildLuminance8DDS(width, height, textureData) {
+        const dds = Buffer.alloc(128);
+
+        // DDS magic
+        dds.write('DDS ', 0, 'ascii');
+
+        // DDS_HEADER
+        dds.writeUInt32LE(124, 4); // dwSize
+        dds.writeUInt32LE(0x0002100F, 8); // CAPS | HEIGHT | WIDTH | PITCH | PIXELFORMAT
+        dds.writeUInt32LE(height, 12);
+        dds.writeUInt32LE(width, 16);
+        dds.writeUInt32LE(width, 20); // pitch for 8-bit uncompressed luminance
+        dds.writeUInt32LE(0, 24); // depth
+        dds.writeUInt32LE(1, 28); // mip count: export top level only
+
+        // DDS_PIXELFORMAT at offset 76
+        dds.writeUInt32LE(32, 76); // pfSize
+        dds.writeUInt32LE(0x00020000, 80); // DDPF_LUMINANCE
+        dds.writeUInt32LE(0, 84); // fourCC
+        dds.writeUInt32LE(8, 88); // RGBBitCount
+        dds.writeUInt32LE(0x000000FF, 92); // RBitMask / luminance mask
+        dds.writeUInt32LE(0, 96); // GBitMask
+        dds.writeUInt32LE(0, 100); // BBitMask
+        dds.writeUInt32LE(0, 104); // ABitMask
+
+        // caps
+        dds.writeUInt32LE(0x1000, 108); // DDSCAPS_TEXTURE
+
+        const topLevelLength = width * height;
+        let topLevelData = textureData.slice(0, topLevelLength);
+        if (topLevelData.length < topLevelLength) {
+            topLevelData = Buffer.concat([topLevelData, Buffer.alloc(topLevelLength - topLevelData.length)]);
+        }
+
+        return Buffer.concat([dds, topLevelData]);
+    };
+
     async toGTFFromFile(file) {
         if (file.dataBlocks.length < 1) { return null; }
         
@@ -22,8 +102,15 @@ class ChoopsTextureReader {
         let fileHeaderDataBlockLength = textureHeaderDataBlockLength + 0x30;
 
         if (file.dataBlocks.length === 1) {
-            textureHeaderDataBlockLength -= 0xB0;
-            fileHeaderDataBlockLength -= 0xB0;
+            if (this._isSingleBlockAtlasTexture(file)) {
+                const atlasInfo = this._getSingleBlockAtlasInfo(file);
+                textureHeaderDataBlockLength = atlasInfo.textureLength;
+                fileHeaderDataBlockLength = textureHeaderDataBlockLength + 0x30;
+            }
+            else {
+                textureHeaderDataBlockLength -= 0xB0;
+                fileHeaderDataBlockLength -= 0xB0;
+            }
         }
 
         // file header
@@ -39,7 +126,16 @@ class ChoopsTextureReader {
 
         let textureData = file.dataBlocks[textureDataBlockIndex].data;
         if (file.dataBlocks.length === 1) {
-            textureData = textureData.slice(0xB0);
+            if (this._isSingleBlockAtlasTexture(file)) {
+                const atlasInfo = this._getSingleBlockAtlasInfo(file);
+                textureData = textureData.slice(
+                    atlasInfo.textureOffset,
+                    atlasInfo.textureOffset + atlasInfo.textureLength
+                );
+            }
+            else {
+                textureData = textureData.slice(0xB0);
+            }
         }
 
         return Buffer.concat([gtfHeader, textureData]);
@@ -47,6 +143,25 @@ class ChoopsTextureReader {
 
     async toDDSFromFile(file) {
         try {
+            if (this._isSingleBlockAtlasTexture(file)) {
+                const gtfBuffer = await this.toGTFFromFile(file);
+                const gtfResult = await this.toDDSFromGTFBuffer(gtfBuffer, file.name, { quiet: true });
+
+                if (gtfResult) {
+                    return gtfResult;
+                }
+
+                const atlasInfo = this._getSingleBlockAtlasInfo(file);
+                const data = file.dataBlocks[0].data;
+                const textureData = data.slice(
+                    atlasInfo.textureOffset,
+                    atlasInfo.textureOffset + atlasInfo.textureLength
+                );
+
+                console.error(`gtf2dds rejected ${file.name}; exporting 8-bit atlas DDS fallback ${atlasInfo.width}x${atlasInfo.height}.`);
+                return this._buildLuminance8DDS(atlasInfo.width, atlasInfo.height, textureData);
+            }
+
             const gtfBuffer = await this.toGTFFromFile(file);
             const result = await this.toDDSFromGTFBuffer(gtfBuffer, file.name);
             return result;
@@ -128,7 +243,7 @@ class ChoopsTextureReader {
         return this._gtf2ddsPathPromise;
     };
 
-    toDDSFromGTFBuffer(gtfBuffer, name) {
+    toDDSFromGTFBuffer(gtfBuffer, name, options = {}) {
         return new Promise(async (resolve) => {
             if (!gtfBuffer) {
                 resolve(null);
@@ -150,7 +265,9 @@ class ChoopsTextureReader {
                     if (err) {
                         try { await fs.rm(tempGtfFileName, { force: true }); } catch (cleanupErr) {}
                         try { await fs.rm(tempDdsFileName, { force: true }); } catch (cleanupErr) {}
-                        console.error(`gtf2dds failed for ${name}: ${err.message || err}`);
+                        if (!options.quiet) {
+                            console.error(`gtf2dds failed for ${name}: ${err.message || err}`);
+                        }
                         resolve(null);
                         return;
                     }
