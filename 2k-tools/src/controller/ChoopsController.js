@@ -36,6 +36,28 @@ class ChoopsController extends EventEmitter {
         this._archiveWriter = new ChoopsArchiveWriter(this);
     };
 
+    async _resolveCanonicalEntryName(nameHash, fallbackId) {
+        let resolved = await hashUtil.hashLookup(nameHash);
+
+        if (resolved && resolved.str) {
+            return resolved.str;
+        }
+
+        const generatedCandidates = hashUtil.generateCandidateNames
+            ? hashUtil.generateCandidateNames()
+            : [];
+
+        for (const candidate of generatedCandidates) {
+            const resolvedCandidate = await hashUtil.resolveCandidateName(candidate);
+
+            if (resolvedCandidate && resolvedCandidate.hash === nameHash) {
+                return resolvedCandidate.str;
+            }
+        }
+
+        return fallbackId.toString();
+    };
+
     _normalizeUnsigned32(value) {
         if (value === undefined || value === null) {
             return 0;
@@ -147,14 +169,23 @@ class ChoopsController extends EventEmitter {
                     return archive;
                 });
 
-                this.cache.tocCache = this.cache.tocCache.map((rawCacheEntry) => {
+                this.cache.tocCache = await Promise.all(this.cache.tocCache.map(async (rawCacheEntry) => {
                     let cacheEntry = new ChoopsCacheEntry();
                     Object.assign(cacheEntry, rawCacheEntry);
                     this._normalizeArchiveEntry(cacheEntry);
+
+                    if (!cacheEntry.name || /^\d+$/.test(cacheEntry.name)) {
+                        cacheEntry.name = await this._resolveCanonicalEntryName(
+                            cacheEntry.nameHash,
+                            cacheEntry.id
+                        );
+                    }
+
                     return cacheEntry;
-                });
+                }));
 
                 this.data = this.cache.tocCache;
+                await this._saveCache();
             }
             catch (err) {
                 this._emitProgress(this.progressTracker.format('Cache not found or empty, reading and building cache...'));
@@ -184,8 +215,10 @@ class ChoopsController extends EventEmitter {
                 cacheEntry.size = data.meta.size;
                 cacheEntry.nameHash = data.meta.nameHash;
 
-                const name = await hashUtil.hashLookup(cacheEntry.nameHash);
-                cacheEntry.name = name ? name.str : data.meta.id.toString();
+                cacheEntry.name = await this._resolveCanonicalEntryName(
+                    cacheEntry.nameHash,
+                    data.meta.id
+                );
 
                 cacheEntry.rawOffset = data.meta.rawOffset;
                 cacheEntry.offset = data.meta.archiveOffset;
@@ -245,7 +278,12 @@ class ChoopsController extends EventEmitter {
     };
 
     getEntryByName(name) {
-        const entry = this.data.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
+        const normalizedName = String(name).replace(/\.(iff|cdf|bin)$/i, '').toLowerCase();
+
+        const entry = this.data.find((entry) => {
+            const entryName = String(entry.name || '').replace(/\.(iff|cdf|bin)$/i, '').toLowerCase();
+            return entryName === normalizedName;
+        });
 
         if (!entry) {
             throw new Error(`Cannot find a resource in the cache with name ${name}.`);
