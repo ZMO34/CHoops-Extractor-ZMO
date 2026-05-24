@@ -64,6 +64,7 @@ async function persistLookup(str, hash) {
     };
 
     hashLookup.push(newEntry);
+    hashLookup.sort((a, b) => a.hash - b.hash || String(a.str).localeCompare(String(b.str)));
 
     try {
         await fs.writeFile(PATH_TO_HASHLOOKUP, JSON.stringify(hashLookup, null, 2));
@@ -75,26 +76,62 @@ async function persistLookup(str, hash) {
     return newEntry;
 };
 
+function addNameVariants(candidates, baseName, extensions = ['.iff']) {
+    candidates.add(baseName);
+
+    for (const extension of extensions) {
+        candidates.add(`${baseName}${extension}`);
+    }
+}
+
 function generateCandidateNames() {
-    const candidates = [];
+    const candidates = new Set();
 
     for (let i = 0; i <= 999; i++) {
-        const id = i.toString().padStart(3, '0');
+        const id3 = i.toString().padStart(3, '0');
+        const id4 = i.toString().padStart(4, '0');
 
-        candidates.push(`ua${id}`);
-        candidates.push(`uh${id}`);
-        candidates.push(`ux${id}`);
+        ['ua', 'uh', 'ux', 'selua', 'seluh', 'selux', 's', 'm'].forEach((prefix) => {
+            addNameVariants(candidates, `${prefix}${id3}`);
+        });
 
-        candidates.push(`selua${id}`);
-        candidates.push(`seluh${id}`);
-        candidates.push(`selux${id}`);
-
-        candidates.push(`coach${id}`);
-        candidates.push(`s${id}`);
-        candidates.push(`m${id}`);
+        addNameVariants(candidates, `coach${id3}`);
+        addNameVariants(candidates, `h${id4}`);
     }
 
-    return candidates;
+    return [...candidates];
+};
+
+module.exports.generateCandidateNames = generateCandidateNames;
+
+module.exports.resolveCandidateName = async function(candidateName) {
+    await this.hashLookupPromise;
+
+    const namesToTry = new Set();
+    namesToTry.add(candidateName);
+
+    const parsed = path.parse(candidateName);
+    if (parsed.ext) {
+        namesToTry.add(parsed.name);
+    }
+    else {
+        namesToTry.add(`${candidateName}.iff`);
+        namesToTry.add(`${candidateName}.cdf`);
+        namesToTry.add(`${candidateName}.bin`);
+    }
+
+    for (const name of namesToTry) {
+        const hash = await this.hash(name);
+        const existing = hashLookup.find(item => item.hash === hash);
+
+        if (existing) {
+            return existing;
+        }
+
+        return await persistLookup(name, hash);
+    }
+
+    return null;
 };
 
 module.exports.hashLookup = async function(hash) {
