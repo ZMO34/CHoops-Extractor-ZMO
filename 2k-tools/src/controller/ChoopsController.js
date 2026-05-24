@@ -36,26 +36,54 @@ class ChoopsController extends EventEmitter {
         this._archiveWriter = new ChoopsArchiveWriter(this);
     };
 
-    async _resolveCanonicalEntryName(nameHash, fallbackId) {
-        let resolved = await hashUtil.hashLookup(nameHash);
+    async _resolveKnownEntryName(nameHash, fallbackId) {
+        const resolved = await hashUtil.hashLookup(nameHash, { allowGenerated: false });
+        return resolved && resolved.str ? resolved.str : fallbackId.toString();
+    };
 
-        if (resolved && resolved.str) {
-            return resolved.str;
+    async _resolveGeneratedAlias(nameHash) {
+        const resolved = await hashUtil.hashLookup(nameHash, { allowGenerated: true });
+        return resolved && resolved.str ? resolved.str : null;
+    };
+
+    _normalizeResourceName(name) {
+        return String(name || '').replace(/\.(iff|cdf|bin)$/i, '').toLowerCase();
+    };
+
+    _addAlias(entry, alias) {
+        if (!alias) {
+            return;
         }
 
-        const generatedCandidates = hashUtil.generateCandidateNames
-            ? hashUtil.generateCandidateNames()
-            : [];
-
-        for (const candidate of generatedCandidates) {
-            const resolvedCandidate = await hashUtil.resolveCandidateName(candidate);
-
-            if (resolvedCandidate && resolvedCandidate.hash === nameHash) {
-                return resolvedCandidate.str;
-            }
+        if (!entry.aliases) {
+            entry.aliases = [];
         }
 
-        return fallbackId.toString();
+        const normalizedAlias = this._normalizeResourceName(alias);
+        if (!normalizedAlias) {
+            return;
+        }
+
+        const exists = entry.aliases.some((existing) => {
+            return this._normalizeResourceName(existing) === normalizedAlias;
+        });
+
+        if (!exists && this._normalizeResourceName(entry.name) !== normalizedAlias) {
+            entry.aliases.push(alias);
+        }
+    };
+
+    async _addGeneratedAliasIfKnown(entry) {
+        if (!entry || !entry.nameHash) {
+            return entry;
+        }
+
+        const generatedAlias = await this._resolveGeneratedAlias(entry.nameHash);
+        if (generatedAlias) {
+            this._addAlias(entry, generatedAlias);
+        }
+
+        return entry;
     };
 
     _normalizeUnsigned32(value) {
@@ -169,23 +197,14 @@ class ChoopsController extends EventEmitter {
                     return archive;
                 });
 
-                this.cache.tocCache = await Promise.all(this.cache.tocCache.map(async (rawCacheEntry) => {
+                this.cache.tocCache = this.cache.tocCache.map((rawCacheEntry) => {
                     let cacheEntry = new ChoopsCacheEntry();
                     Object.assign(cacheEntry, rawCacheEntry);
                     this._normalizeArchiveEntry(cacheEntry);
-
-                    if (!cacheEntry.name || /^\d+$/.test(cacheEntry.name)) {
-                        cacheEntry.name = await this._resolveCanonicalEntryName(
-                            cacheEntry.nameHash,
-                            cacheEntry.id
-                        );
-                    }
-
                     return cacheEntry;
-                }));
+                });
 
                 this.data = this.cache.tocCache;
-                await this._saveCache();
             }
             catch (err) {
                 this._emitProgress(this.progressTracker.format('Cache not found or empty, reading and building cache...'));
@@ -215,10 +234,14 @@ class ChoopsController extends EventEmitter {
                 cacheEntry.size = data.meta.size;
                 cacheEntry.nameHash = data.meta.nameHash;
 
-                cacheEntry.name = await this._resolveCanonicalEntryName(
+                cacheEntry.name = await this._resolveKnownEntryName(
                     cacheEntry.nameHash,
                     data.meta.id
                 );
+
+                if (/^\d+$/.test(cacheEntry.name)) {
+                    await this._addGeneratedAliasIfKnown(cacheEntry);
+                }
 
                 cacheEntry.rawOffset = data.meta.rawOffset;
                 cacheEntry.offset = data.meta.archiveOffset;
@@ -278,11 +301,14 @@ class ChoopsController extends EventEmitter {
     };
 
     getEntryByName(name) {
-        const normalizedName = String(name).replace(/\.(iff|cdf|bin)$/i, '').toLowerCase();
+        const normalizedName = this._normalizeResourceName(name);
 
         const entry = this.data.find((entry) => {
-            const entryName = String(entry.name || '').replace(/\.(iff|cdf|bin)$/i, '').toLowerCase();
-            return entryName === normalizedName;
+            const entryName = this._normalizeResourceName(entry.name);
+            const aliases = entry.aliases || [];
+            return entryName === normalizedName || aliases.some((alias) => {
+                return this._normalizeResourceName(alias) === normalizedName;
+            });
         });
 
         if (!entry) {
@@ -354,7 +380,7 @@ class ChoopsController extends EventEmitter {
                 parser.on('file-data', (file) => {
                     pendingFilePromises.push((async () => {
                         if (file.type === IFFType.TYPES.UNKNOWN && file.typeRaw) {
-                            const type = await hashUtil.hashLookup(file.typeRaw);
+                            const type = await hashUtil.hashLookup(file.typeRaw, { allowGenerated: false });
 
                             if (type) {
                                 file.type = IFFType.stringToType(type.str);
