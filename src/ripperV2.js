@@ -138,6 +138,8 @@ module.exports = async (inputPath, outputPath, options) => {
     logger.info('\n** Reading data from game files **\n');
 
     await mkdir(path.join(outputPath, '_overrides'));
+    const textureTempDir = path.join(outputPath, '_work', 'texture-conversion');
+    await mkdir(textureTempDir);
 
     controller.on('progress', progressHandler);
     await controller.read({
@@ -146,7 +148,9 @@ module.exports = async (inputPath, outputPath, options) => {
     controller.off('progress', progressHandler);
 
     let counter = 0;
-    const textureReader = new ChoopsTextureReader();
+    const textureReader = new ChoopsTextureReader({
+        tempDir: textureTempDir
+    });
 
     let iffsToRead = [];
     let typesToExtract = Object.keys(IFFType.TYPES).map((type) => {
@@ -356,6 +360,13 @@ module.exports = async (inputPath, outputPath, options) => {
             masterManifest.containers.push(containerManifest);
             counter += 1;
         }
+    }
+
+    try {
+        await fs.rm(textureTempDir, { recursive: true, force: true });
+    }
+    catch (err) {
+        logger.info(`Failed to clean texture temp directory: ${err.message || err}`);
     }
 
     if (sortByType) {
