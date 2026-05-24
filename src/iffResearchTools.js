@@ -22,6 +22,28 @@ function firstBytesHex(buffer, length = 32) {
     return buffer.slice(0, Math.min(length, buffer.length)).toString('hex').match(/../g)?.join(' ') || '';
 }
 
+function looksLikeMetadataOnlyFrontendIff(buffer) {
+    if (buffer.length < 0x40) return false;
+
+    const magicBE = buffer.readUInt32BE(0);
+
+    if (magicBE !== 0xF0985030) {
+        return false;
+    }
+
+    const fileSize = buffer.length;
+
+    for (let offset = 0; offset < Math.min(buffer.length - 4, 0x100); offset += 4) {
+        const valueBE = buffer.readUInt32BE(offset);
+
+        if (valueBE > fileSize && valueBE > 0x1000) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function getAsciiStrings(buffer, minLength = 4) {
     const results = [];
     let start = null;
@@ -121,6 +143,7 @@ async function inspectIff(iffPath, outputPath, options = {}) {
 
     let parsed = null;
     let structuralError = null;
+
     try {
         parsed = smartScanner._internal.parseIffBuffer(buffer, 0);
     }
@@ -132,11 +155,14 @@ async function inspectIff(iffPath, outputPath, options = {}) {
         };
     }
 
+    const metadataOnlyFrontendIff = looksLikeMetadataOnlyFrontendIff(buffer);
+
     const manifest = {
         source: iffPath,
         size: buffer.length,
         firstBytes: firstBytesHex(buffer),
         fallbackHeader: parseFallbackHeader(buffer),
+        metadataOnlyFrontendIff,
         parsedByStructuralScanner: parsed,
         structuralError,
         parsedByIFFReader: null,
@@ -147,68 +173,62 @@ async function inspectIff(iffPath, outputPath, options = {}) {
             'Only binary-derived IFF fields are recorded.',
             'Names/types come from IFF tables when present; otherwise raw/index fallback is preserved.',
             'No team IDs, roster IDs, or spreadsheet-derived assumptions are used.',
-            'Metadata-only frontend IFF variants are expected to fail generic IFFReader parsing; that failure is recorded instead of treated as fatal.'
+            'Metadata-only frontend IFF variants intentionally bypass generic IFFReader parsing.'
         ]
     };
 
-    try {
-        const parser = new IFFReader({ decompressBlocks: options.decompressBlocks !== false });
-        await pipeline(Readable.from(buffer), parser);
-        const file = parser.controller.file;
+    if (!metadataOnlyFrontendIff) {
+        try {
+            const parser = new IFFReader({ decompressBlocks: options.decompressBlocks !== false });
+            await pipeline(Readable.from(buffer), parser);
+            const file = parser.controller.file;
 
-        manifest.parsedByIFFReader = {
-            magic: toHex(file.magic),
-            headerSize: file.headerSize,
-            fileLength: file.fileLength,
-            blockCount: file.blockCount,
-            fileCount: file.fileCount,
-            hasFileNameData: parser.hasFileNameData,
-            blocks: file.blocks.map((block) => ({
-                index: block.index,
-                name: toHex(block.name),
-                type: toHex(block.type),
-                uncompressedLength: block.uncompressedLength,
-                compressedLength: block.compressedLength,
-                startOffset: block.startOffset,
-                isIndexed: block.isIndexed,
-                isCompressed: block.isCompressed,
-                firstBytes: block.data ? firstBytesHex(block.data) : null
-            })),
-            files: file.files.map((subfile) => ({
-                index: subfile.index,
-                id: toHex(subfile.id),
-                name: subfile.name,
-                type: IFFType.typeToString(subfile.type),
-                typeRaw: toHex(subfile.typeRaw),
-                offsetCount: subfile.offsetCount,
-                dataBlocks: subfile.dataBlocks.map((block) => ({
+            manifest.parsedByIFFReader = {
+                magic: toHex(file.magic),
+                headerSize: file.headerSize,
+                fileLength: file.fileLength,
+                blockCount: file.blockCount,
+                fileCount: file.fileCount,
+                hasFileNameData: parser.hasFileNameData,
+                blocks: file.blocks.map((block) => ({
                     index: block.index,
-                    offset: block.offset,
-                    length: block.length,
+                    name: toHex(block.name),
+                    type: toHex(block.type),
+                    uncompressedLength: block.uncompressedLength,
+                    compressedLength: block.compressedLength,
+                    startOffset: block.startOffset,
+                    isIndexed: block.isIndexed,
+                    isCompressed: block.isCompressed,
                     firstBytes: block.data ? firstBytesHex(block.data) : null
+                })),
+                files: file.files.map((subfile) => ({
+                    index: subfile.index,
+                    id: toHex(subfile.id),
+                    name: subfile.name,
+                    type: IFFType.typeToString(subfile.type),
+                    typeRaw: toHex(subfile.typeRaw),
+                    offsetCount: subfile.offsetCount,
+                    dataBlocks: subfile.dataBlocks.map((block) => ({
+                        index: block.index,
+                        offset: block.offset,
+                        length: block.length,
+                        firstBytes: block.data ? firstBytesHex(block.data) : null
+                    }))
                 }))
-            }))
-        };
-
-        if (options.dumpSubfiles) {
-            const subDir = path.join(outputPath, 'subfiles');
-            await mkdir(subDir);
-            for (const subfile of file.files) {
-                const typeName = IFFType.typeToString(subfile.type).toLowerCase();
-                const base = `${String(subfile.index).padStart(4, '0')}_${safeName(subfile.name)}.${typeName}`;
-                const chunks = subfile.dataBlocks.map((block) => block.data || Buffer.alloc(0));
-                const combined = Buffer.concat(chunks);
-                const outFile = path.join(subDir, `${base}.bin`);
-                await fs.writeFile(outFile, combined);
-                manifest.exportedSubfiles.push({ index: subfile.index, name: subfile.name, type: typeName, path: outFile, size: combined.length });
-            }
+            };
+        }
+        catch (err) {
+            manifest.readerError = {
+                message: err.message,
+                stack: err.stack,
+                likelyCause: 'Nonstandard metadata-only IFF layout or invalid generic block-table assumptions.'
+            };
         }
     }
-    catch (err) {
+    else {
         manifest.readerError = {
-            message: err.message,
-            stack: err.stack,
-            likelyCause: 'Nonstandard metadata-only IFF layout or invalid generic block-table assumptions.'
+            skipped: true,
+            likelyCause: 'Detected frontend metadata-only IFF variant. Generic archive parser intentionally bypassed.'
         };
     }
 
