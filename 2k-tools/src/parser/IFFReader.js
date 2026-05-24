@@ -41,7 +41,13 @@ class IFFReader extends FileParser {
         this.file.fileCount = this._readUInt32(buf, 24);
         this.file.unk2 = this._readUInt32(buf, 28);
 
-        this.bytes(this.file.blockCount * 0x20, this._onFileBlocks);
+        if (this.file.blockCount > 0) {
+            this.bytes(this.file.blockCount * 0x20, this._onFileBlocks);
+        }
+        else {
+            this._setDefaultFileNames();
+            this.skipBytes(Infinity);
+        }
     };
 
     _onFileBlocks(buf) {
@@ -67,16 +73,31 @@ class IFFReader extends FileParser {
             return a.startOffset - b.startOffset;
         });
 
-        this.bytes(this.file.fileCount * 4, function (buf) {
-            this.file.dataFileOffsetBuf = buf;
-            this.bytes(this.file.headerSize - this.currentBufferIndex, this._onDataHeaderBlocks);
-        }.bind(this));
+        if (this.file.fileCount > 0) {
+            this.bytes(this.file.fileCount * 4, function (buf) {
+                this.file.dataFileOffsetBuf = buf;
+                const bytesToRead = this.file.headerSize - this.currentBufferIndex;
+                if (bytesToRead > 0) {
+                    this.bytes(bytesToRead, this._onDataHeaderBlocks);
+                }
+                else {
+                    this._onDataHeaderBlocks(Buffer.alloc(0));
+                }
+            }.bind(this));
+        }
+        else {
+            this._onDataHeaderBlocks(Buffer.alloc(0));
+        }
     };
 
     _onDataHeaderBlocks(buf) {
         let currentOffset = 0;
 
         for (let i = 0; i < this.file.fileCount; i++) {
+            if (currentOffset + 12 > buf.length) {
+                break;
+            }
+
             let file = new IFFDataFile();
             file.index = i;
             file.id = this._readUInt32(buf, currentOffset);
@@ -84,8 +105,12 @@ class IFFReader extends FileParser {
             file.offsetCount = this._readUInt32(buf, currentOffset + 8);
 
             for (let j = 0; j < file.offsetCount; j++) {
+                const offsetPosition = currentOffset + 12 + (j * 4);
+                if (offsetPosition + 4 > buf.length) {
+                    break;
+                }
                 let dataBlock = new IFFDataFileBlock();
-                dataBlock.offset = this._readUInt32(buf, currentOffset + 12 + (j * 4));
+                dataBlock.offset = this._readUInt32(buf, offsetPosition);
                 file.dataBlocks.push(dataBlock);
             }
 
@@ -134,21 +159,34 @@ class IFFReader extends FileParser {
                 return this._preBlockData(0);
             }
         }
+        else {
+            this.skipBytes(Infinity);
+        }
     };
 
     _preBlockData(blockIndex) {
         const block = this.file.blocks[blockIndex];
+        if (!block) {
+            this.skipBytes(Infinity);
+            return;
+        }
+
         let bytesToRead = block.isCompressed ? block.compressedLength : block.uncompressedLength;
 
-        this.bytes(bytesToRead, function (buf) {
-            return this._onBlockData(buf, block)
-        }.bind(this));
+        if (bytesToRead > 0) {
+            this.bytes(bytesToRead, function (buf) {
+                return this._onBlockData(buf, block)
+            }.bind(this));
+        }
+        else {
+            this._onBlockData(Buffer.alloc(0), block);
+        }
     };
 
     _onBlockData(buf, block) {
         block.data = buf;
 
-        if (block.isCompressed && this.decompressBlocks) {
+        if (block.isCompressed && this.decompressBlocks && buf.length >= 20) {
             const decompressedBuf = this._decompressBlockData(buf, block);
             block.data = decompressedBuf;
         }
@@ -194,14 +232,23 @@ class IFFReader extends FileParser {
     _onFileNameDefinitions(buf) {
         this.file.nameDataBuf = Buffer.concat([this.file.nameDataBuf, buf]);
 
-        const numNames = buf.readUInt32LE(0);
-        const offsetToNames = buf.readUInt32LE(4) + 4 - 1;
+        const numNames = buf.length >= 4 ? buf.readUInt32LE(0) : 0;
+        const offsetToNames = buf.length >= 8 ? buf.readUInt32LE(4) + 4 - 1 : 0;
         let currentOffset = offsetToNames;
 
         for (let i = 0; i < numNames && i < this.file.files.length; i++) {
+            if (currentOffset + 4 > buf.length) {
+                break;
+            }
             const offsetToFileNames = buf.readUInt32LE(currentOffset) + currentOffset - 1;
+            if (offsetToFileNames < 0 || offsetToFileNames + 8 > buf.length) {
+                break;
+            }
             const offsetToName = buf.readUInt32LE(offsetToFileNames) + offsetToFileNames - 1;
             const offsetToType = buf.readUInt32LE(offsetToFileNames + 4) + offsetToFileNames + 4 - 1;
+            if (offsetToName < 0 || offsetToType <= offsetToName || offsetToType + 10 > buf.length) {
+                break;
+            }
 
             this.file.files[i].name = buf.toString('utf16le', offsetToName, offsetToType);
             const type = buf.toString('utf16le', offsetToType, offsetToType + 10);
@@ -225,7 +272,12 @@ class IFFReader extends FileParser {
         this.file.files.forEach(file => {
             file.dataBlocks.forEach((dataBlock, index) => {
                 dataBlock.isChanged = false;
-                dataBlock.data = this.file.blocks[index].data.slice(dataBlock.offset, dataBlock.offset + dataBlock.length);
+                if (this.file.blocks[index] && this.file.blocks[index].data) {
+                    dataBlock.data = this.file.blocks[index].data.slice(dataBlock.offset, dataBlock.offset + dataBlock.length);
+                }
+                else {
+                    dataBlock.data = Buffer.alloc(0);
+                }
             });
 
             this.emit('file-data', file);
