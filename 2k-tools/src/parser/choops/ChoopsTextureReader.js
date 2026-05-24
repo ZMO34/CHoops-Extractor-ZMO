@@ -8,7 +8,7 @@ const envPathUtil = require('../../util/envPathUtil');
 
 class ChoopsTextureReader {
     constructor() {
-        
+        this._gtf2ddsPathPromise = null;
     };
 
     async toGTFFromFile(file) {
@@ -53,7 +53,7 @@ class ChoopsTextureReader {
             return result;
         }
         catch (err) {
-            console.error(err);
+            console.error(err.message || err);
             return null;
         }
     };
@@ -85,76 +85,98 @@ class ChoopsTextureReader {
             return result;
         }
         catch (err) {
-            console.error(err);
+            console.error(err.message || err);
             return null;
         }
     };
 
-    _getGtf2DdsPath() {
-        const candidates = [];
-
-        if (process.pkg) {
-            const exeDir = path.dirname(process.execPath);
-            candidates.push(path.join(exeDir, 'gtf2dds.exe'));
-            candidates.push(path.join(exeDir, 'lib', 'gtf2dds.exe'));
-            candidates.push(path.join(process.cwd(), 'gtf2dds.exe'));
-            candidates.push(path.join(process.cwd(), 'lib', 'gtf2dds.exe'));
+    async _getGtf2DdsPath() {
+        if (this._gtf2ddsPathPromise) {
+            return this._gtf2ddsPathPromise;
         }
 
-        candidates.push(path.join(__dirname, '../../../lib/gtf2dds.exe'));
+        this._gtf2ddsPathPromise = (async () => {
+            const envPath = await envPathUtil.getEnvPath();
+            const candidates = [];
 
-        const match = candidates.find(candidate => fsBase.existsSync(candidate));
-        if (!match) {
+            if (process.pkg) {
+                const exeDir = path.dirname(process.execPath);
+                candidates.push(path.join(exeDir, 'gtf2dds.exe'));
+                candidates.push(path.join(exeDir, 'lib', 'gtf2dds.exe'));
+                candidates.push(path.join(process.cwd(), 'gtf2dds.exe'));
+                candidates.push(path.join(process.cwd(), 'lib', 'gtf2dds.exe'));
+            }
+
+            candidates.push(path.join(__dirname, '../../../lib/gtf2dds.exe'));
+
+            for (const candidate of candidates) {
+                if (!fsBase.existsSync(candidate)) {
+                    continue;
+                }
+
+                // pkg assets live inside C:\snapshot and cannot be executed directly.
+                // Copy bundled executables to the normal temp work area before execFile.
+                if (process.pkg && candidate.toLowerCase().indexOf('\\snapshot\\') >= 0) {
+                    const extractedExePath = path.join(envPath.temp, 'choops-extractor-gtf2dds.exe');
+                    await fs.copyFile(candidate, extractedExePath);
+                    return extractedExePath;
+                }
+
+                return candidate;
+            }
+
             throw new Error(`Cannot find gtf2dds.exe. Checked: ${candidates.join(', ')}`);
-        }
+        })();
 
-        return match;
+        return this._gtf2ddsPathPromise;
     };
 
     toDDSFromGTFBuffer(gtfBuffer, name) {
-        return new Promise(async (resolve, reject) => {
+        return new Promise(async (resolve) => {
             if (!gtfBuffer) {
                 resolve(null);
+                return;
             }
-            else {
-                const guid = uuid();
-                const envPath = await envPathUtil.getEnvPath();
-    
-                const fileNameFormatted = `${guid}_${name}`;
-                const tempGtfFileName = path.join(envPath.temp, `${fileNameFormatted}.gtf`);
-                const tempDdsFileName = path.join(envPath.temp, `${fileNameFormatted}.dds`);
-    
-                await fs.writeFile(tempGtfFileName, gtfBuffer);
-    
-                let pathToGtfExe;
-                try {
-                    pathToGtfExe = this._getGtf2DdsPath();
-                }
-                catch (err) {
-                    try { await fs.rm(tempGtfFileName, { force: true }); } catch (cleanupErr) {}
-                    reject(err);
-                    return;
-                }
 
-                execFile(pathToGtfExe, ['-v', '-z', '-o', tempDdsFileName, tempGtfFileName], async (err, out, stderr) => {
+            const guid = uuid();
+            const envPath = await envPathUtil.getEnvPath();
+
+            const fileNameFormatted = `${guid}_${name}`;
+            const tempGtfFileName = path.join(envPath.temp, `${fileNameFormatted}.gtf`);
+            const tempDdsFileName = path.join(envPath.temp, `${fileNameFormatted}.dds`);
+
+            try {
+                await fs.writeFile(tempGtfFileName, gtfBuffer);
+                const pathToGtfExe = await this._getGtf2DdsPath();
+
+                execFile(pathToGtfExe, ['-v', '-z', '-o', tempDdsFileName, tempGtfFileName], async (err) => {
                     if (err) {
                         try { await fs.rm(tempGtfFileName, { force: true }); } catch (cleanupErr) {}
-                        reject(err);
+                        try { await fs.rm(tempDdsFileName, { force: true }); } catch (cleanupErr) {}
+                        console.error(`gtf2dds failed for ${name}: ${err.message || err}`);
+                        resolve(null);
+                        return;
                     }
-                    else {
+
+                    try {
                         const ddsData = await fs.readFile(tempDdsFileName);
-        
-                        try {
-                            await fs.rm(tempGtfFileName, { force: true });
-                            await fs.rm(tempDdsFileName, { force: true });
-                        }
-                        catch (err) {
-                            
-                        }
-        
+                        await fs.rm(tempGtfFileName, { force: true });
+                        await fs.rm(tempDdsFileName, { force: true });
                         resolve(ddsData);
                     }
+                    catch (readErr) {
+                        try { await fs.rm(tempGtfFileName, { force: true }); } catch (cleanupErr) {}
+                        try { await fs.rm(tempDdsFileName, { force: true }); } catch (cleanupErr) {}
+                        console.error(`Failed to read converted DDS for ${name}: ${readErr.message || readErr}`);
+                        resolve(null);
+                    }
                 });
+            }
+            catch (err) {
+                try { await fs.rm(tempGtfFileName, { force: true }); } catch (cleanupErr) {}
+                try { await fs.rm(tempDdsFileName, { force: true }); } catch (cleanupErr) {}
+                console.error(`Texture conversion setup failed for ${name}: ${err.message || err}`);
+                resolve(null);
             }
         });
     };
