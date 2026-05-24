@@ -4,11 +4,10 @@ const fs = require('fs/promises');
 const fsBase = require('fs');
 const { execFile } = require('child_process');
 
-const envPathUtil = require('../../util/envPathUtil');
-
 class ChoopsTextureReader {
-    constructor() {
+    constructor(options = {}) {
         this._gtf2ddsPathPromise = null;
+        this.tempDir = options.tempDir || path.join(process.cwd(), '_choops_texture_temp');
     };
 
     async toGTFFromFile(file) {
@@ -96,7 +95,6 @@ class ChoopsTextureReader {
         }
 
         this._gtf2ddsPathPromise = (async () => {
-            const envPath = await envPathUtil.getEnvPath();
             const candidates = [];
 
             if (process.pkg) {
@@ -114,10 +112,9 @@ class ChoopsTextureReader {
                     continue;
                 }
 
-                // pkg assets live inside C:\snapshot and cannot be executed directly.
-                // Copy bundled executables to the normal temp work area before execFile.
                 if (process.pkg && candidate.toLowerCase().indexOf('\\snapshot\\') >= 0) {
-                    const extractedExePath = path.join(envPath.temp, 'choops-extractor-gtf2dds.exe');
+                    const extractedExePath = path.join(this.tempDir, 'choops-extractor-gtf2dds.exe');
+                    await fs.mkdir(this.tempDir, { recursive: true });
                     await fs.copyFile(candidate, extractedExePath);
                     return extractedExePath;
                 }
@@ -139,13 +136,13 @@ class ChoopsTextureReader {
             }
 
             const guid = uuid();
-            const envPath = await envPathUtil.getEnvPath();
-
-            const fileNameFormatted = `${guid}_${name}`;
-            const tempGtfFileName = path.join(envPath.temp, `${fileNameFormatted}.gtf`);
-            const tempDdsFileName = path.join(envPath.temp, `${fileNameFormatted}.dds`);
+            const safeName = String(name || 'texture').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+            const fileNameFormatted = `${guid}_${safeName}`;
+            const tempGtfFileName = path.join(this.tempDir, `${fileNameFormatted}.gtf`);
+            const tempDdsFileName = path.join(this.tempDir, `${fileNameFormatted}.dds`);
 
             try {
+                await fs.mkdir(this.tempDir, { recursive: true });
                 await fs.writeFile(tempGtfFileName, gtfBuffer);
                 const pathToGtfExe = await this._getGtf2DdsPath();
 
