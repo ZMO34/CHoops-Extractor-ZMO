@@ -7,9 +7,9 @@
   },
   "main": "index.js",
   "scripts": {
-    "pack": "pkg -t node18-win-x64 -o dist/choops-extractor.exe --compress GZip ."
+    "pack": "pkg -t node18-win-x64 -o dist/choops-extractor.exe --compress GZip . && node scripts/copy-native-tools.js"
   },
-  "author": "", 
+  "author": "",
   "license": "MIT",
   "dependencies": {
     "commander": "^9.1.0",
