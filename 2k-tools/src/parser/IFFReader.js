@@ -198,7 +198,7 @@ class IFFReader extends FileParser {
         const offsetToNames = buf.readUInt32LE(4) + 4 - 1;
         let currentOffset = offsetToNames;
 
-        for (let i = 0; i < numNames; i++) {
+        for (let i = 0; i < numNames && i < this.file.files.length; i++) {
             const offsetToFileNames = buf.readUInt32LE(currentOffset) + currentOffset - 1;
             const offsetToName = buf.readUInt32LE(offsetToFileNames) + offsetToFileNames - 1;
             const offsetToType = buf.readUInt32LE(offsetToFileNames + 4) + offsetToFileNames + 4 - 1;
@@ -211,6 +211,8 @@ class IFFReader extends FileParser {
 
             currentOffset += 4;
         }
+
+        this.skipBytes(Infinity);
     };
 
     _setDefaultFileNames() {
