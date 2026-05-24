@@ -1,7 +1,8 @@
 const path = require('path');
 const uuid = require('uuid').v4;
 const fs = require('fs/promises');
-const { exec } = require('child_process');
+const fsBase = require('fs');
+const { execFile } = require('child_process');
 
 const envPathUtil = require('../../util/envPathUtil');
 
@@ -89,6 +90,27 @@ class ChoopsTextureReader {
         }
     };
 
+    _getGtf2DdsPath() {
+        const candidates = [];
+
+        if (process.pkg) {
+            const exeDir = path.dirname(process.execPath);
+            candidates.push(path.join(exeDir, 'gtf2dds.exe'));
+            candidates.push(path.join(exeDir, 'lib', 'gtf2dds.exe'));
+            candidates.push(path.join(process.cwd(), 'gtf2dds.exe'));
+            candidates.push(path.join(process.cwd(), 'lib', 'gtf2dds.exe'));
+        }
+
+        candidates.push(path.join(__dirname, '../../../lib/gtf2dds.exe'));
+
+        const match = candidates.find(candidate => fsBase.existsSync(candidate));
+        if (!match) {
+            throw new Error(`Cannot find gtf2dds.exe. Checked: ${candidates.join(', ')}`);
+        }
+
+        return match;
+    };
+
     toDDSFromGTFBuffer(gtfBuffer, name) {
         return new Promise(async (resolve, reject) => {
             if (!gtfBuffer) {
@@ -104,19 +126,27 @@ class ChoopsTextureReader {
     
                 await fs.writeFile(tempGtfFileName, gtfBuffer);
     
-                const pathToGtfExe = process.pkg ? 'gtf2dds.exe' : path.join(__dirname, '../../../lib/gtf2dds.exe');
-                exec(`${pathToGtfExe} -v -z -o "${tempDdsFileName}" ${tempGtfFileName}`, async (err, out, stderr) => {
+                let pathToGtfExe;
+                try {
+                    pathToGtfExe = this._getGtf2DdsPath();
+                }
+                catch (err) {
+                    try { await fs.rm(tempGtfFileName, { force: true }); } catch (cleanupErr) {}
+                    reject(err);
+                    return;
+                }
+
+                execFile(pathToGtfExe, ['-v', '-z', '-o', tempDdsFileName, tempGtfFileName], async (err, out, stderr) => {
                     if (err) {
+                        try { await fs.rm(tempGtfFileName, { force: true }); } catch (cleanupErr) {}
                         reject(err);
                     }
                     else {
-                        // console.log(out);
-        
                         const ddsData = await fs.readFile(tempDdsFileName);
         
                         try {
-                            fs.rm(tempGtfFileName);
-                            fs.rm(tempDdsFileName);
+                            await fs.rm(tempGtfFileName, { force: true });
+                            await fs.rm(tempDdsFileName, { force: true });
                         }
                         catch (err) {
                             
