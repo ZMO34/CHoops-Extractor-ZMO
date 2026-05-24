@@ -13,11 +13,12 @@ const teamselectlogoTool = require('./src/teamselectlogoTool');
 const scneObjExporter = require('./src/scneObjExporterStable');
 const splitPartExporter = require('./src/scneSplitPartExporter');
 const smartAssetScanner = require('./src/smartAssetScanner');
+const iffResearchTools = require('./src/iffResearchTools');
 const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
 
 program
     .name('choops-extractor')
-    .version('0.5.6')
+    .version('0.5.7')
     .description('A command line utility to extract College Hoops 2k8 (PS3) textures and more.');
 
 program.command('smart-scan')
@@ -46,8 +47,51 @@ program.command('smart-scan')
         console.log(`[SMART-SCAN] Assets indexed: ${result.manifest.assets.length}`);
         console.log(`[SMART-SCAN] Signatures found: ${result.manifest.summary.signaturesFound}`);
         console.log(`[SMART-SCAN] CDF texture records: ${result.manifest.summary.cdfTextureRecords}`);
-        console.log(`[SMART-SCAN] String refs: ${result.manifest.summary.stringRefs}`);
         console.log(`[SMART-SCAN] Errors: ${result.manifest.summary.errors}`);
+    });
+
+program.command('inspect-iff')
+    .description('Deep-inspect one IFF file and write header/block/file/subfile research manifests.')
+    .argument('<iff file>', 'IFF file to inspect')
+    .argument('<output path>', 'Output directory for IFF inspection files')
+    .option('--dump-subfiles', 'Dump each parsed IFF subfile as raw .bin')
+    .option('--no-decompress-blocks', 'Do not decompress compressed IFF blocks through IFFReader')
+    .option('--max-probe-hits <number>', 'Maximum compression probe hits to record', '250')
+    .action(async (iffFile, outputPath, options) => {
+        console.log('[INSPECT-IFF] Inspecting IFF...');
+        const result = await iffResearchTools.inspectIff(iffFile, outputPath, {
+            dumpSubfiles: !!options.dumpSubfiles,
+            decompressBlocks: options.decompressBlocks,
+            maxProbeHits: Number(options.maxProbeHits)
+        });
+
+        const structural = result.parsedByStructuralScanner;
+        const reader = result.parsedByIFFReader;
+        console.log('[INSPECT-IFF] Complete.');
+        console.log(`[INSPECT-IFF] Size: ${result.size}`);
+        console.log(`[INSPECT-IFF] Structural block count: ${structural ? structural.header.blockCount : 'not parsed'}`);
+        console.log(`[INSPECT-IFF] Structural file count: ${structural ? structural.header.fileCount : 'not parsed'}`);
+        console.log(`[INSPECT-IFF] IFFReader file count: ${reader ? reader.fileCount : 'not parsed'}`);
+        console.log(`[INSPECT-IFF] Probe hits: ${result.compressionProbeHits.length}`);
+    });
+
+program.command('scan-refs')
+    .description('Extract ASCII/UTF-16 strings and filename-style references from possible DB/CDF/BIN/IFF files.')
+    .argument('<input>', 'Input file or directory to scan')
+    .argument('<output path>', 'Output directory for reference scan files')
+    .option('--min-length <number>', 'Minimum string length', '4')
+    .option('--only-matches', 'Only store strings matching known filename/reference patterns in the manifest')
+    .action(async (inputPath, outputPath, options) => {
+        console.log('[SCAN-REFS] Scanning strings and references...');
+        const result = await iffResearchTools.scanRefs(inputPath, outputPath, {
+            minLength: Number(options.minLength),
+            onlyMatches: !!options.onlyMatches
+        });
+
+        console.log('[SCAN-REFS] Complete.');
+        console.log(`[SCAN-REFS] Files scanned: ${result.summary.filesScanned}`);
+        console.log(`[SCAN-REFS] Strings found: ${result.summary.totalStrings}`);
+        console.log(`[SCAN-REFS] Pattern matches: ${result.summary.totalPatternMatches}`);
     });
 
 program.command('rip')
