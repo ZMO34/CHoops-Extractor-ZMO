@@ -102,23 +102,52 @@ function summarizeStrings(strings) {
     return { byEncoding, patternCounts };
 }
 
+function parseFallbackHeader(buffer) {
+    const u32be = (offset) => offset + 4 <= buffer.length ? buffer.readUInt32BE(offset) : null;
+    const u32le = (offset) => offset + 4 <= buffer.length ? buffer.readUInt32LE(offset) : null;
+
+    return {
+        magicBE: toHex(u32be(0)),
+        magicLE: toHex(u32le(0)),
+        firstWordsBE: Array.from({ length: Math.min(16, Math.floor(buffer.length / 4)) }, (_, i) => toHex(u32be(i * 4))),
+        firstWordsLE: Array.from({ length: Math.min(16, Math.floor(buffer.length / 4)) }, (_, i) => toHex(u32le(i * 4))),
+        fileSize: buffer.length
+    };
+}
+
 async function inspectIff(iffPath, outputPath, options = {}) {
     await mkdir(outputPath);
     const buffer = await fs.readFile(iffPath);
-    const parsed = smartScanner._internal.parseIffBuffer(buffer, 0);
+
+    let parsed = null;
+    let structuralError = null;
+    try {
+        parsed = smartScanner._internal.parseIffBuffer(buffer, 0);
+    }
+    catch (err) {
+        structuralError = {
+            message: err.message,
+            stack: err.stack,
+            likelyCause: 'The file does not match the standard archive-style IFF layout, or uses a metadata-only IFF variant.'
+        };
+    }
 
     const manifest = {
         source: iffPath,
         size: buffer.length,
         firstBytes: firstBytesHex(buffer),
+        fallbackHeader: parseFallbackHeader(buffer),
         parsedByStructuralScanner: parsed,
+        structuralError,
         parsedByIFFReader: null,
+        readerError: null,
         compressionProbeHits: [],
         exportedSubfiles: [],
         notes: [
             'Only binary-derived IFF fields are recorded.',
             'Names/types come from IFF tables when present; otherwise raw/index fallback is preserved.',
-            'No team IDs, roster IDs, or spreadsheet-derived assumptions are used.'
+            'No team IDs, roster IDs, or spreadsheet-derived assumptions are used.',
+            'Metadata-only frontend IFF variants are expected to fail generic IFFReader parsing; that failure is recorded instead of treated as fatal.'
         ]
     };
 
@@ -176,21 +205,30 @@ async function inspectIff(iffPath, outputPath, options = {}) {
         }
     }
     catch (err) {
-        manifest.readerError = { message: err.message, stack: err.stack };
+        manifest.readerError = {
+            message: err.message,
+            stack: err.stack,
+            likelyCause: 'Nonstandard metadata-only IFF layout or invalid generic block-table assumptions.'
+        };
     }
 
-    const probeHits = probeUtil.scanBuffer(buffer, { maxHits: Number(options.maxProbeHits || 250) });
-    manifest.compressionProbeHits = probeHits.map((hit, index) => ({
-        index,
-        algorithm: hit.algorithm,
-        label: hit.label,
-        absoluteOffset: hit.absoluteOffset,
-        decompressedLength: hit.data.length,
-        firstBytes: firstBytesHex(hit.data)
-    }));
+    try {
+        const probeHits = probeUtil.scanBuffer(buffer, { maxHits: Number(options.maxProbeHits || 250) });
+        manifest.compressionProbeHits = probeHits.map((hit, index) => ({
+            index,
+            algorithm: hit.algorithm,
+            label: hit.label,
+            absoluteOffset: hit.absoluteOffset,
+            decompressedLength: hit.data.length,
+            firstBytes: firstBytesHex(hit.data)
+        }));
+    }
+    catch (err) {
+        manifest.probeError = { message: err.message, stack: err.stack };
+    }
 
     await fs.writeFile(path.join(outputPath, 'iff_inspect_manifest.json'), JSON.stringify(manifest, null, 2));
-    await fs.writeFile(path.join(outputPath, 'header.json'), JSON.stringify(parsed ? parsed.header : null, null, 2));
+    await fs.writeFile(path.join(outputPath, 'header.json'), JSON.stringify(parsed ? parsed.header : manifest.fallbackHeader, null, 2));
     await fs.writeFile(path.join(outputPath, 'blocks.json'), JSON.stringify(parsed ? parsed.blocks : [], null, 2));
     await fs.writeFile(path.join(outputPath, 'files.json'), JSON.stringify(parsed ? parsed.files : [], null, 2));
 
