@@ -66,13 +66,6 @@ async function persistLookup(str, hash) {
     hashLookup.push(newEntry);
     hashLookup.sort((a, b) => a.hash - b.hash || String(a.str).localeCompare(String(b.str)));
 
-    try {
-        await fs.writeFile(PATH_TO_HASHLOOKUP, JSON.stringify(hashLookup, null, 2));
-    }
-    catch (err) {
-        console.warn(`Failed to persist hash lookup for ${str}: ${err.message}`);
-    }
-
     return newEntry;
 };
 
