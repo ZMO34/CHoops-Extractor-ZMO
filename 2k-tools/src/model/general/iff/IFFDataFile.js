@@ -11,9 +11,9 @@ class IFFDataFile {
     };
 
     get isChanged() {
-        return this._isChanged || this.dataBlocks.find((block) => {
-            return block.isChanged
-        }).length > 0;
+        return this._isChanged || this.dataBlocks.some((block) => {
+            return block && block.isChanged;
+        });
     };
 
     set isChanged(isChanged) {
