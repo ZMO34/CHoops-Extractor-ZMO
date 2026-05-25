@@ -2,7 +2,7 @@ const { program } = require('commander');
 const fs = require('fs');
 
 const cache = require('./src/cache');
-const ripper = require('./src/ripperV2');
+const ripper = require('./src/ripperV3');
 const importer = require('./src/importerV2');
 const reverter = require('./src/reverter');
 const builder = require('./src/builder');
@@ -18,8 +18,8 @@ const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
 
 program
     .name('choops-extractor')
-    .version('0.5.7')
-    .description('A command line utility to extract College Hoops 2k8 (PS3) textures and more.');
+    .version('0.5.8')
+    .description('A command line utility to extract College Hoops 2k8 (PS3) textures, CDF/IFF pairs, audio payloads, and more.');
 
 program.command('smart-scan')
     .description('Recursively scan IFF/CDF/BIN containers and generate evidence-based structural manifests.')
