@@ -1,14 +1,16 @@
 {
   "name": "choops-extractor",
-  "version": "0.5.9",
-  "description": "A command-line utility and research suite for College Hoops 2K8 (PS3) textures, archives, CDF/IFF pairs, and rosters",
+  "version": "0.6.0",
+  "description": "A command-line utility and research suite for College Hoops 2K8 (PS3) textures, archives, CDF/IFF pairs, rosters, and GUI workflows",
   "bin": {
     "choops-extractor": "./index.js",
-    "choops-roster": "./roster.js"
+    "choops-roster": "./roster.js",
+    "choops-gui": "./gui.js"
   },
   "main": "index.js",
   "scripts": {
-    "pack": "pkg -t node18-win-x64 -o dist/choops-extractor.exe --compress GZip . && node scripts/copy-native-tools.js",
+    "pack": "pkg -t node18-win-x64 -o dist/choops-extractor.exe --compress GZip . && pkg gui.js -t node18-win-x64 -o dist/choops-gui.exe --compress GZip . && node scripts/copy-native-tools.js",
+    "gui": "node gui.js",
     "roster": "node roster.js"
   },
   "author": "",
