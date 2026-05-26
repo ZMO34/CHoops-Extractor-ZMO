@@ -321,22 +321,63 @@ class ChoopsController extends EventEmitter {
     async getFileRawData(name) {
         const entry = this.getEntryByName(name);
         const validatedRead = this._validateReadParameters(entry.size, entry.offset, name);
+        const gameFilePaths = await gameFileUtil.getGameFilePaths(this.gameDirectoryPath);
 
         let entryBuf = Buffer.alloc(validatedRead.length);
-        const entryPath = await gameFileUtil.getGameFilePathByIndex(this.gameDirectoryPath, entry.location);
+        let remainingLength = validatedRead.length;
+        let destinationOffset = 0;
+        let archiveIndex = Number(entry.location);
+        let archiveOffset = validatedRead.offset;
 
         this.progressTracker.reset();
-        this.progressTracker.totalSteps = 2;
+        this.progressTracker.totalSteps = Math.max(1, entry.isSplit ? 2 : 1);
 
-        this.progressTracker.step();
-        this._emitProgress(this.progressTracker.format(`Reading resource from path: ${entryPath} @ offset 0x${validatedRead.offset.toString(16)}.`));
+        while (remainingLength > 0) {
+            if (!Number.isInteger(archiveIndex) || archiveIndex < 0 || archiveIndex >= gameFilePaths.length) {
+                throw new Error(
+                    `Resource ${name} extends past the available game archive files. `
+                    + `archiveIndex=${archiveIndex}, remainingLength=0x${remainingLength.toString(16)}`
+                );
+            }
 
-        await this._openAndReadFile(entryPath, entryBuf, validatedRead.length, validatedRead.offset);
+            const entryPath = gameFilePaths[archiveIndex];
+            const stats = await fsPromies.stat(entryPath);
+
+            if (archiveOffset > stats.size) {
+                throw new Error(
+                    `Invalid split archive read for ${name}. `
+                    + `${entryPath} offset=0x${archiveOffset.toString(16)}, `
+                    + `fileSize=0x${stats.size.toString(16)}`
+                );
+            }
+
+            const availableInThisArchive = stats.size - archiveOffset;
+            const chunkLength = Math.min(remainingLength, availableInThisArchive);
+
+            if (chunkLength <= 0) {
+                throw new Error(
+                    `Invalid split archive read for ${name}. `
+                    + `${entryPath} has no remaining bytes at offset=0x${archiveOffset.toString(16)}`
+                );
+            }
+
+            this.progressTracker.step();
+            this._emitProgress(this.progressTracker.format(
+                `Reading resource from path: ${entryPath} @ offset 0x${archiveOffset.toString(16)} length 0x${chunkLength.toString(16)}.`
+            ));
+
+            await this._openAndReadFile(entryPath, entryBuf, chunkLength, archiveOffset, destinationOffset);
+
+            remainingLength -= chunkLength;
+            destinationOffset += chunkLength;
+            archiveIndex += 1;
+            archiveOffset = 0;
+        }
 
         return entryBuf;
     };
 
-    async _openAndReadFile(pathName, buf, length, offset) {
+    async _openAndReadFile(pathName, buf, length, offset, bufferOffset = 0) {
         const validatedRead = this._validateReadParameters(length, offset, pathName);
         const validatedWindow = await this._validateReadWindow(
             pathName,
@@ -349,7 +390,7 @@ class ChoopsController extends EventEmitter {
         try {
             await fd.read({
                 buffer: buf,
-                offset: 0,
+                offset: bufferOffset,
                 length: validatedWindow.length,
                 position: validatedWindow.offset
             });
@@ -357,6 +398,8 @@ class ChoopsController extends EventEmitter {
         finally {
             await fd.close();
         }
+
+        return validatedWindow.length;
     };
 
     async getFileController(name) {
@@ -367,7 +410,7 @@ class ChoopsController extends EventEmitter {
 
         const resourceRawData = await this.getFileRawData(name);
 
-        if (resourceRawData.readUInt32BE(0) === 0xFF3BEF94) {
+        if (resourceRawData.length >= 4 && resourceRawData.readUInt32BE(0) === 0xFF3BEF94) {
             const resourceDataStream = Readable.from(resourceRawData);
 
             this.progressTracker.totalSteps += 1;
