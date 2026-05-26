@@ -1,6 +1,5 @@
 const path = require('path');
 const fs = require('fs/promises');
-const fsBase = require('fs');
 const mkdir = require('make-dir');
 
 const ripperV2 = require('./ripperV2');
@@ -33,12 +32,8 @@ async function walkFiles(root) {
         const entries = await fs.readdir(current, { withFileTypes: true });
         for (const entry of entries) {
             const full = path.join(current, entry.name);
-            if (entry.isDirectory()) {
-                await walk(full);
-            }
-            else {
-                files.push(full);
-            }
+            if (entry.isDirectory()) await walk(full);
+            else files.push(full);
         }
     }
 
@@ -52,17 +47,13 @@ async function appendLog(logPath, line) {
 }
 
 function parseToolWrappedFile(buffer, filePath) {
-    if (buffer.length < 0x0C || readUInt32BE(buffer, 0) !== 0x326B546C) {
-        return null;
-    }
+    if (buffer.length < 0x0C || readUInt32BE(buffer, 0) !== 0x326B546C) return null;
 
     const headerLength = readUInt32BE(buffer, 0x04, 0);
     const typeCode = buffer.readUInt16BE(0x08);
     const numberOfBlocks = buffer.readUInt16BE(0x0A);
 
-    if (headerLength !== 0x0C + (numberOfBlocks * 4) || headerLength > buffer.length) {
-        return null;
-    }
+    if (headerLength !== 0x0C + (numberOfBlocks * 4) || headerLength > buffer.length) return null;
 
     const blocks = [];
     let cursor = headerLength;
@@ -80,29 +71,45 @@ function parseToolWrappedFile(buffer, filePath) {
     };
 }
 
-async function enhanceNameTextureExtraction(outputPath, textureReader, logPath) {
+function decodeNameMetadata(buffer) {
+    const wrapped = parseToolWrappedFile(buffer, 'metadata.name');
+    if (!wrapped || wrapped.dataBlocks.length < 1) return null;
+
+    const data = wrapped.dataBlocks[0].data;
+    const pairs = [];
+    for (let offset = 0; offset + 4 <= data.length; offset += 4) {
+        const x = data.readUInt16BE(offset);
+        const y = data.readUInt16BE(offset + 2);
+        if (x === 0 && y === 0) break;
+        pairs.push({ x, y });
+    }
+
+    return {
+        length: data.length,
+        pairCount: pairs.length,
+        firstPairs: pairs.slice(0, 16)
+    };
+}
+
+async function enhanceNameMetadataLogging(outputPath, logPath) {
     const files = await walkFiles(outputPath);
-    let converted = 0;
-    let audioExtracted = 0;
+    let metadataFiles = 0;
 
     for (const filePath of files) {
         const lower = filePath.toLowerCase();
 
         if (lower.endsWith('.name')) {
             try {
-                const wrapped = parseToolWrappedFile(await fs.readFile(filePath), filePath);
-                if (!wrapped) continue;
-
-                const dds = await textureReader.toDDSFromFile(wrapped);
-                if (dds) {
-                    const outPath = filePath.replace(/\.name$/i, '.dds');
-                    await fs.writeFile(outPath, dds);
-                    converted += 1;
-                    await appendLog(logPath, `[NAME-DDS] ${path.relative(outputPath, outPath)}`);
-                }
+                const metadata = decodeNameMetadata(await fs.readFile(filePath));
+                if (!metadata) continue;
+                metadataFiles += 1;
+                await appendLog(
+                    logPath,
+                    `[NAME-META] ${path.relative(outputPath, filePath)} length=${metadata.length} pairCount=${metadata.pairCount} firstPairs=${metadata.firstPairs.map((pair) => `${pair.x}:${pair.y}`).join(' ')}`
+                );
             }
             catch (err) {
-                await appendLog(logPath, `[NAME-DDS] failed ${path.relative(outputPath, filePath)}: ${err.message || err}`);
+                await appendLog(logPath, `[NAME-META] failed ${path.relative(outputPath, filePath)}: ${err.message || err}`);
             }
         }
 
@@ -113,7 +120,6 @@ async function enhanceNameTextureExtraction(outputPath, textureReader, logPath) 
 
                 const outPath = filePath.replace(/\.audo$/i, '.audio_payload.bin');
                 await fs.writeFile(outPath, Buffer.concat(wrapped.dataBlocks.map((block) => block.data || Buffer.alloc(0))));
-                audioExtracted += 1;
                 await appendLog(logPath, `[AUDO] ${path.relative(outputPath, outPath)}`);
             }
             catch (err) {
@@ -122,7 +128,7 @@ async function enhanceNameTextureExtraction(outputPath, textureReader, logPath) 
         }
     }
 
-    await appendLog(logPath, `[SUMMARY] NAME DDS converted=${converted}; standard AUDO payloads extracted=${audioExtracted}`);
+    await appendLog(logPath, `[SUMMARY] NAME metadata files logged=${metadataFiles}; NAME is coordinate metadata, not a DDS texture.`);
 }
 
 async function enhanceCdfBackedExtraction(outputPath, textureReader, logPath, options) {
@@ -130,16 +136,12 @@ async function enhanceCdfBackedExtraction(outputPath, textureReader, logPath, op
     const iffFiles = files.filter((file) => file.toLowerCase().endsWith('.iff'));
     let pairsExtracted = 0;
 
-    const logger = {
-        info: async (message) => appendLog(logPath, message)
-    };
+    const logger = { info: async (message) => appendLog(logPath, message) };
 
     for (const iffPath of iffFiles) {
         try {
             const iffBuffer = await fs.readFile(iffPath);
-            if (readUInt32BE(iffBuffer, 0) !== cdfBackedIffExtractor.CDF_BACKED_IFF_MAGIC) {
-                continue;
-            }
+            if (readUInt32BE(iffBuffer, 0) !== cdfBackedIffExtractor.CDF_BACKED_IFF_MAGIC) continue;
 
             const parsed = cdfBackedIffExtractor.parseCdfBackedIff(iffBuffer);
             const baseDir = path.dirname(iffPath);
@@ -227,11 +229,11 @@ module.exports = async (inputPath, outputPath, options = {}) => {
     const textureReader = new ChoopsTextureReader({ tempDir: textureTempDir });
 
     await appendLog(enhancementLog, '*** Choops enhanced rip pass ***');
-    await appendLog(enhancementLog, 'Adds deterministic CDF/IFF extraction, audio payload extraction, NAME DDS conversion, and preservation notes.');
+    await appendLog(enhancementLog, 'Adds deterministic CDF/IFF extraction, audio payload extraction, NAME metadata logging, and preservation notes.');
 
     await logStandardIffPreservation(outputPath, enhancementLog);
     await enhanceCdfBackedExtraction(outputPath, textureReader, enhancementLog, options);
-    await enhanceNameTextureExtraction(outputPath, textureReader, enhancementLog);
+    await enhanceNameMetadataLogging(outputPath, enhancementLog);
 
     try {
         await fs.rm(textureTempDir, { recursive: true, force: true });
