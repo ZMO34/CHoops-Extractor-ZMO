@@ -106,9 +106,24 @@ function argsFor(action, p) {
         addFlag(args, '--primitive-mode', p.primitiveMode || 'strip');
         return args;
     }
-    if (action === 'roster-decode') return ['__roster', 'decode', p.inputFile, p.outputDir];
-    if (action === 'roster-compare') return ['__roster', 'compare', p.baseRoster, p.customRoster, p.outputDir];
+    if (action === 'roster-decode') return ['roster-decode', p.inputFile, p.outputDir];
+    if (action === 'roster-compare') return ['roster-compare', p.baseRoster, p.customRoster, p.outputDir];
     throw new Error(`Unknown action: ${action}`);
+}
+
+function getCliCommandAndArgs(args) {
+    if (process.pkg) {
+        const exeName = process.platform === 'win32' ? 'choops-extractor.exe' : 'choops-extractor';
+        return {
+            command: path.join(path.dirname(process.execPath), exeName),
+            spawnArgs: args
+        };
+    }
+
+    return {
+        command: process.execPath,
+        spawnArgs: [path.join(__dirname, '..', 'index.js'), ...args]
+    };
 }
 
 class Jobs {
@@ -118,11 +133,9 @@ class Jobs {
         const args = argsFor(action, params || {});
         const job = { id, action, args, status: 'running', exitCode: null, log: '', startedAt: new Date().toISOString(), finishedAt: null };
         this.items.push(job);
-        const isPkg = !!process.pkg;
-        const command = process.execPath;
-        const spawnArgs = isPkg ? args : [path.join(__dirname, '..', 'gui.js'), ...args];
-        job.log += `> ${command} ${spawnArgs.join(' ')}\n`;
-        const child = spawn(command, spawnArgs, { cwd: process.cwd(), env: process.env, windowsHide: false });
+        const commandInfo = getCliCommandAndArgs(args);
+        job.log += `> ${commandInfo.command} ${commandInfo.spawnArgs.join(' ')}\n`;
+        const child = spawn(commandInfo.command, commandInfo.spawnArgs, { cwd: process.cwd(), env: process.env, windowsHide: false });
         child.stdout.on('data', c => job.log += c.toString('utf8'));
         child.stderr.on('data', c => job.log += c.toString('utf8'));
         child.on('error', e => { job.status = 'error'; job.log += `\n[ERROR] ${e.stack || e.message || e}`; job.finishedAt = new Date().toISOString(); });
