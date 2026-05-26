@@ -9,6 +9,9 @@ const EndianUtil = require('../util/endianUtil');
 const IFFType = require('../model/general/iff/IFFType');
 const h7aCompressionUtil = require('../util/h7aCompressionUtil');
 
+const MISSING_BLOCK_OFFSET = 0xFFFFFFFF;
+const H7A_MAGIC = 0x0E4837C3;
+
 class IFFReader extends FileParser {
     constructor(options) {
         super();
@@ -120,7 +123,18 @@ class IFFReader extends FileParser {
 
         this.file.blocks.forEach((block, blockIndex) => {
             const filesInThisBlock = this.file.files.filter(file => {
-                return file.offsetCount >= (blockIndex + 1);
+                if (file.offsetCount < (blockIndex + 1)) {
+                    return false;
+                }
+
+                const dataBlock = file.dataBlocks[blockIndex];
+                if (!dataBlock) {
+                    return false;
+                }
+
+                return dataBlock.offset !== MISSING_BLOCK_OFFSET
+                    && dataBlock.offset >= 0
+                    && dataBlock.offset <= block.uncompressedLength;
             });
 
             filesInThisBlock.sort((a, b) => {
@@ -132,7 +146,7 @@ class IFFReader extends FileParser {
             });
 
             if (filesInThisBlock.length === 1) {
-                filesInThisBlock[0].dataBlocks[blockIndex].length = block.uncompressedLength;
+                filesInThisBlock[0].dataBlocks[blockIndex].length = block.uncompressedLength - filesInThisBlock[0].dataBlocks[blockIndex].offset;
             }
             else {
                 filesInThisBlock.forEach((file, index) => {
@@ -142,7 +156,7 @@ class IFFReader extends FileParser {
                         nextOffset = filesInThisBlock[index + 1].dataBlocks[blockIndex].offset;
                     }
 
-                    file.dataBlocks[blockIndex].length = nextOffset - file.dataBlocks[blockIndex].offset;
+                    file.dataBlocks[blockIndex].length = Math.max(0, nextOffset - file.dataBlocks[blockIndex].offset);
                 });
             }
         });
@@ -173,6 +187,11 @@ class IFFReader extends FileParser {
 
         let bytesToRead = block.isCompressed ? block.compressedLength : block.uncompressedLength;
 
+        if (!Number.isFinite(bytesToRead) || bytesToRead < 0) {
+            this.emit('error', new Error(`Invalid IFF block length at block ${blockIndex}: ${bytesToRead}`));
+            return;
+        }
+
         if (bytesToRead > 0) {
             this.bytes(bytesToRead, function (buf) {
                 return this._onBlockData(buf, block)
@@ -187,8 +206,14 @@ class IFFReader extends FileParser {
         block.data = buf;
 
         if (block.isCompressed && this.decompressBlocks && buf.length >= 20) {
-            const decompressedBuf = this._decompressBlockData(buf, block);
-            block.data = decompressedBuf;
+            try {
+                const decompressedBuf = this._decompressBlockData(buf, block);
+                block.data = decompressedBuf;
+            }
+            catch (err) {
+                this.emit('error', err);
+                return;
+            }
         }
 
         block.isChanged = false;
@@ -208,6 +233,27 @@ class IFFReader extends FileParser {
         const compressedLength = buf.readUInt32BE(8);
         const unk = buf.readUInt32BE(12);
         const shiftAmount = buf.readUInt32BE(16);
+
+        if (magic !== H7A_MAGIC) {
+            throw new Error(
+                `Invalid H7A block magic at IFF block ${block.index}: `
+                + `0x${magic.toString(16).padStart(8, '0')}`
+            );
+        }
+
+        if (uncompressedLength !== block.uncompressedLength) {
+            throw new Error(
+                `Invalid H7A uncompressed length at IFF block ${block.index}: `
+                + `wrapper=0x${uncompressedLength.toString(16)}, table=0x${block.uncompressedLength.toString(16)}`
+            );
+        }
+
+        if (compressedLength !== buf.length) {
+            throw new Error(
+                `Invalid H7A compressed length at IFF block ${block.index}: `
+                + `wrapper=0x${compressedLength.toString(16)}, actual=0x${buf.length.toString(16)}`
+            );
+        }
 
         block.compressedLength = block.uncompressedLength;
         return h7aCompressionUtil.decompress(buf.slice(20), uncompressedLength, shiftAmount);
@@ -272,8 +318,8 @@ class IFFReader extends FileParser {
         this.file.files.forEach(file => {
             file.dataBlocks.forEach((dataBlock, index) => {
                 dataBlock.isChanged = false;
-                if (this.file.blocks[index] && this.file.blocks[index].data) {
-                    dataBlock.data = this.file.blocks[index].data.slice(dataBlock.offset, dataBlock.offset + dataBlock.length);
+                if (this.file.blocks[index] && this.file.blocks[index].data && dataBlock.offset !== MISSING_BLOCK_OFFSET) {
+                    dataBlock.data = this.file.blocks[index].data.slice(dataBlock.offset, dataBlock.offset + (dataBlock.length || 0));
                 }
                 else {
                     dataBlock.data = Buffer.alloc(0);
