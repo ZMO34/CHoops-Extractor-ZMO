@@ -7,7 +7,6 @@ const { pipeline, Readable } = require('stream');
 
 const cacheUtil = require('../util/cacheUtil');
 const hashUtil = require('../util/2kHashUtil');
-const bigIntUtil = require('../util/bigIntUtil');
 const gameFileUtil = require('../util/choops/choopsGameFileUtil');
 
 const IFFReader = require('../parser/IFFReader');
@@ -44,6 +43,10 @@ class ChoopsController extends EventEmitter {
     async _resolveGeneratedAlias(nameHash) {
         const resolved = await hashUtil.hashLookup(nameHash, { allowGenerated: true });
         return resolved && resolved.str ? resolved.str : null;
+    };
+
+    _normalizeExactResourceName(name) {
+        return String(name || '').toLowerCase();
     };
 
     _normalizeResourceName(name) {
@@ -301,15 +304,34 @@ class ChoopsController extends EventEmitter {
     };
 
     getEntryByName(name) {
+        const exactName = this._normalizeExactResourceName(name);
         const normalizedName = this._normalizeResourceName(name);
 
-        const entry = this.data.find((entry) => {
-            const entryName = this._normalizeResourceName(entry.name);
-            const aliases = entry.aliases || [];
-            return entryName === normalizedName || aliases.some((alias) => {
-                return this._normalizeResourceName(alias) === normalizedName;
-            });
+        // Exact names must win before extensionless aliases. CDF-backed pairs often
+        // share the same base name, for example teamselectlogo.iff and
+        // teamselectlogo.cdf. The old extensionless-first lookup could return the
+        // CDF when callers explicitly asked for the IFF, which prevented paired-bank
+        // extraction from ever seeing the 0xF0985030 metadata file.
+        let entry = this.data.find((candidate) => {
+            return this._normalizeExactResourceName(candidate.name) === exactName;
         });
+
+        if (!entry) {
+            entry = this.data.find((candidate) => {
+                const aliases = candidate.aliases || [];
+                return aliases.some((alias) => this._normalizeExactResourceName(alias) === exactName);
+            });
+        }
+
+        if (!entry) {
+            entry = this.data.find((candidate) => {
+                const entryName = this._normalizeResourceName(candidate.name);
+                const aliases = candidate.aliases || [];
+                return entryName === normalizedName || aliases.some((alias) => {
+                    return this._normalizeResourceName(alias) === normalizedName;
+                });
+            });
+        }
 
         if (!entry) {
             throw new Error(`Cannot find a resource in the cache with name ${name}.`);
@@ -470,29 +492,14 @@ class ChoopsController extends EventEmitter {
             return tocEntry.id === entry.id;
         });
 
-        archiveCacheEntry.archiveIndex = entry.location;
-        archiveCacheEntry.archiveOffset = entry.offset;
-        archiveCacheEntry.rawOffset = entry.rawOffset;
-        archiveCacheEntry.size = entry.size;
-        archiveCacheEntry.isSplit = entry.isSplit;
-        archiveCacheEntry.splitSecondFileSize = entry.splitSecondFileSize;
-
-        delete entry.controller;
-    };
-
-    async revertAll() {
-        const reverted = await this._archiveWriter.revertAll();
-
-        this.cache = await cacheUtil.getCache(
-            cacheUtil.CACHES.CHOOPS.cache,
-            path.join(__dirname, '../data/choops/ch2k8_default.cache')
-        );
-
-        await this._saveCache();
+        archiveCacheEntry.offset = entry.originalOffset;
+        archiveCacheEntry.size = entry.originalSize;
     };
 
     _emitProgress(message) {
-        this.emit('progress', message);
+        this.emit('progress', {
+            message: message
+        });
     };
 };
 
