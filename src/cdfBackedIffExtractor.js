@@ -2,16 +2,19 @@ const path = require('path');
 const fs = require('fs/promises');
 const mkdir = require('make-dir');
 
+const ddsUtil = require('./ddsUtil');
+
 const CDF_BACKED_IFF_MAGIC = 0xF0985030;
 const STANDARD_IFF_MAGIC = 0xFF3BEF94;
 const NAME_TABLE_MAGIC = 0xAA171516;
+const CDF_TEXTURE_MAGIC = 0x0E4837C3;
 const TYPE_HASHES = {
     0x1AEDDA1F: 'AUDO',
     0x5C36FB69: 'TXTR'
 };
 
 function safeName(value) {
-    return String(value || 'record').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+    return String(value || 'record').replace(/[<>:"/\\|?*]/g, '_');
 }
 
 function readUInt32BE(buffer, offset, fallback = null) {
@@ -200,16 +203,83 @@ function validateRecordAgainstCdf(record, cdfBuffer) {
     const contiguous = inBounds
         && record.segmentHeaderOffset + record.segmentHeaderLength === record.payloadOffset;
 
-    const gtfPayload = inBounds
+    const cdfTexturePayload = inBounds
         && record.type === 'TXTR'
-        && readUInt32BE(cdfBuffer, record.payloadOffset) === 0x0E4837C3;
+        && readUInt32BE(cdfBuffer, record.payloadOffset) === CDF_TEXTURE_MAGIC;
 
     const audioLengthMatches = inBounds
         && record.type === 'AUDO'
         && record.segmentHeaderLength >= 0x24
         && readUInt32BE(cdfBuffer, record.segmentHeaderOffset + 0x18) === record.payloadLength;
 
-    return { inBounds, contiguous, gtfPayload, audioLengthMatches };
+    return { inBounds, contiguous, cdfTexturePayload, gtfPayload: false, audioLengthMatches };
+}
+
+function inferCdfTextureDimensions(sourceSize) {
+    const candidates = [
+        { width: 256, height: 128, format: 'DXT1' },
+        { width: 256, height: 256, format: 'DXT1' },
+        { width: 512, height: 256, format: 'DXT1' },
+        { width: 128, height: 128, format: 'DXT1' },
+        { width: 128, height: 64, format: 'DXT1' },
+        { width: 256, height: 128, format: 'DXT5' }
+    ];
+
+    for (const candidate of candidates) {
+        const expected = ddsUtil.topMipSizeFor(candidate.width, candidate.height, candidate.format);
+        if (sourceSize >= expected) {
+            return candidate;
+        }
+    }
+
+    return { width: 256, height: 128, format: 'DXT1' };
+}
+
+function extractManualCdfTextureDds({ cdfBuffer, record, header, payload }) {
+    const fullRecord = Buffer.concat([header, payload]);
+    const imageOffsetInFullRecord = 0x78;
+    const imageOffsetInPayload = Math.max(0, imageOffsetInFullRecord - header.length);
+    const availableImageBytes = fullRecord.length - imageOffsetInFullRecord;
+
+    if (availableImageBytes <= 0 || imageOffsetInPayload >= payload.length) {
+        return null;
+    }
+
+    const inferred = inferCdfTextureDimensions(availableImageBytes);
+    const topMipSize = ddsUtil.topMipSizeFor(inferred.width, inferred.height, inferred.format);
+    if (availableImageBytes < topMipSize) {
+        return null;
+    }
+
+    const sourceImageData = payload.slice(imageOffsetInPayload, imageOffsetInPayload + topMipSize);
+    const deswizzled = ddsUtil.deswizzleBcTopMip(
+        sourceImageData,
+        inferred.width,
+        inferred.height,
+        inferred.format,
+        'block-rect'
+    );
+
+    return {
+        dds: ddsUtil.wrapDds(deswizzled, {
+            width: inferred.width,
+            height: inferred.height,
+            fourCC: inferred.format
+        }),
+        info: {
+            width: inferred.width,
+            height: inferred.height,
+            format: inferred.format,
+            swizzleMode: 'block-rect',
+            imageOffsetInFullRecord,
+            imageOffsetInPayload,
+            topMipSize,
+            fullRecordLength: fullRecord.length,
+            payloadLength: payload.length,
+            headerLength: header.length,
+            availableImageBytes
+        }
+    };
 }
 
 async function extractCdfBackedPair({ iffName, iffBuffer, cdfBuffer, outputDir, textureReader, logger, rawType }) {
@@ -245,10 +315,20 @@ async function extractCdfBackedPair({ iffName, iffBuffer, cdfBuffer, outputDir, 
         await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.cdf_header.bin`), header);
 
         if (record.type === 'TXTR') {
-            const gtfPath = path.join(recordDir, `${safeName(record.name)}.gtf`);
-            await fs.writeFile(gtfPath, payload);
+            await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.cdf_payload.bin`), payload);
 
-            if (!rawType && textureReader && validation.gtfPayload) {
+            let converted = false;
+            if (!rawType && validation.cdfTexturePayload) {
+                const manual = extractManualCdfTextureDds({ cdfBuffer, record, header, payload });
+                if (manual && manual.dds) {
+                    await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.dds`), manual.dds);
+                    await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.texture_manifest.json`), JSON.stringify(manual.info, null, 2));
+                    summary.ddsConverted += 1;
+                    converted = true;
+                }
+            }
+
+            if (!converted && !rawType && textureReader && readUInt32BE(payload, 0) === 0x01080000) {
                 const dds = await textureReader.toDDSFromGTFBuffer(payload, record.name, { quiet: true });
                 if (dds) {
                     await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.dds`), dds);
