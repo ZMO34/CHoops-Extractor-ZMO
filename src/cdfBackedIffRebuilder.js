@@ -24,33 +24,21 @@ function readUInt32BE(buffer, offset, fallback = null) {
     return buffer.readUInt32BE(offset);
 }
 
-async function readJsonIfExists(filePath) {
-    if (!await pathExists(filePath)) return null;
-    return JSON.parse(await fs.readFile(filePath, 'utf-8'));
-}
-
-function getH7aOptionsFromManifest(manifest) {
-    return {
-        shiftAmount: manifest && manifest.h7a && manifest.h7a.shiftAmount ? manifest.h7a.shiftAmount : 0x8,
-        unknown0C: manifest && manifest.h7a && Number.isInteger(manifest.h7a.unknown0C) ? manifest.h7a.unknown0C : 0
-    };
-}
-
-function validateDdsForManifest(recordName, dds, manifest) {
-    if (!manifest || !manifest.ddsLayout) return;
-
-    const expected = manifest.ddsLayout;
-    if (dds.width !== expected.width || dds.height !== expected.height || dds.mipMapCount !== expected.mipMapCount) {
-        throw new Error(
-            `${recordName}.dds layout mismatch. `
-            + `Expected ${expected.width}x${expected.height} mips=${expected.mipMapCount}, `
-            + `got ${dds.width}x${dds.height} mips=${dds.mipMapCount}.`
-        );
+function validateDdsAgainstOriginal(recordName, dds, originalPayload) {
+    const decoded = cdfBackedIffExtractor.decodeH7aTexturePayload(originalPayload);
+    if (!decoded || !decoded.layout) {
+        throw new Error(`${recordName}: cannot infer original CDF texture DDS layout.`);
     }
 
-    if (String(dds.fourCC).trim() !== String(expected.format).trim()) {
+    const expected = decoded.layout;
+    const actualFormat = String(dds.fourCC).trim();
+    const expectedFormat = String(expected.format).trim();
+
+    if (dds.width !== expected.width || dds.height !== expected.height || dds.mipMapCount !== expected.mipMapCount || actualFormat !== expectedFormat) {
         throw new Error(
-            `${recordName}.dds format mismatch. Expected ${expected.format}, got ${dds.fourCC}.`
+            `${recordName}.dds layout mismatch. `
+            + `Expected ${expected.width}x${expected.height} ${expectedFormat} mips=${expected.mipMapCount}, `
+            + `got ${dds.width}x${dds.height} ${actualFormat} mips=${dds.mipMapCount}.`
         );
     }
 
@@ -61,40 +49,28 @@ function validateDdsForManifest(recordName, dds, manifest) {
             + `got 0x${dds.payload.length.toString(16)}.`
         );
     }
+
+    return decoded;
 }
 
 async function buildH7aPayloadFromDds(recordDir, recordName, originalPayload) {
     const ddsPath = path.join(recordDir, `${safeName(recordName)}.dds`);
     if (!await pathExists(ddsPath)) return originalPayload;
 
-    const manifestPath = path.join(recordDir, `${safeName(recordName)}.texture_manifest.json`);
-    const manifest = await readJsonIfExists(manifestPath);
+    const originalWrapper = cdfBackedIffExtractor.parseH7aWrapper(originalPayload);
+    if (!originalWrapper) return originalPayload;
+
     const dds = ddsUtil.parseDds(await fs.readFile(ddsPath));
-    validateDdsForManifest(recordName, dds, manifest);
+    validateDdsAgainstOriginal(recordName, dds, originalPayload);
 
-    return h7aCompressionUtil.buildLiteralWrappedPayload(dds.payload, getH7aOptionsFromManifest(manifest));
+    return h7aCompressionUtil.buildLiteralWrappedPayload(dds.payload, {
+        shiftAmount: originalWrapper.shiftAmount || 0x8,
+        unknown0C: Number.isInteger(originalWrapper.unknown0C) ? originalWrapper.unknown0C : 0
+    });
 }
 
-async function buildGtfPayloadFromDds(recordDir, recordName, originalPayload, textureReader) {
-    // GTF CDF rebuild from edited DDS is intentionally conservative for now.
-    // The standard TXTR writer knows how to rebuild normal IFF TXTRs, but CDF GTF
-    // records can carry bank-specific metadata. Preserve original GTF unless the
-    // user provides a complete replacement .gtf in the record folder.
-    const gtfPath = path.join(recordDir, `${safeName(recordName)}.gtf`);
-    if (await pathExists(gtfPath)) {
-        return await fs.readFile(gtfPath);
-    }
-
-    return originalPayload;
-}
-
-async function buildRecordPayload({ record, recordDir, originalPayload, textureReader }) {
+async function buildRecordPayload({ record, recordDir, originalPayload }) {
     if (record.type !== 'TXTR') {
-        const rawPayloadPath = path.join(recordDir, `${safeName(record.name)}.payload.bin`);
-        const audioPayloadPath = path.join(recordDir, `${safeName(record.name)}.audio_payload.bin`);
-
-        if (await pathExists(rawPayloadPath)) return await fs.readFile(rawPayloadPath);
-        if (await pathExists(audioPayloadPath)) return await fs.readFile(audioPayloadPath);
         return originalPayload;
     }
 
@@ -104,17 +80,12 @@ async function buildRecordPayload({ record, recordDir, originalPayload, textureR
         return await buildH7aPayloadFromDds(recordDir, record.name, originalPayload);
     }
 
-    if (payloadMagic === 0x01080000) {
-        return await buildGtfPayloadFromDds(recordDir, record.name, originalPayload, textureReader);
-    }
-
-    const rawPayloadPath = path.join(recordDir, `${safeName(record.name)}.cdf_payload.bin`);
-    if (await pathExists(rawPayloadPath)) return await fs.readFile(rawPayloadPath);
-
+    // GTF-in-CDF DDS import is intentionally not guessed yet. Users can still
+    // replace the whole .cdf/.iff pair as raw top-level resources if needed.
     return originalPayload;
 }
 
-async function rebuildCdfBackedPairFromFolder(folderPath, textureReader = null) {
+async function rebuildCdfBackedPairFromFolder(folderPath) {
     const baseName = path.basename(folderPath);
     const iffPath = path.join(folderPath, `${baseName}.iff`);
     const cdfPath = path.join(folderPath, `${baseName}.cdf`);
@@ -144,7 +115,7 @@ async function rebuildCdfBackedPairFromFolder(folderPath, textureReader = null) 
         const recordDir = path.join(folderPath, safeName(record.type.toUpperCase()), safeName(record.name));
         const originalHeader = originalCdf.slice(record.segmentHeaderOffset, record.segmentHeaderOffset + record.segmentHeaderLength);
         const originalPayload = originalCdf.slice(record.payloadOffset, record.payloadOffset + record.payloadLength);
-        const rebuiltPayload = await buildRecordPayload({ record, recordDir, originalPayload, textureReader });
+        const rebuiltPayload = await buildRecordPayload({ record, recordDir, originalPayload });
 
         if (!rebuiltPayload.equals(originalPayload)) {
             modifiedRecords += 1;
