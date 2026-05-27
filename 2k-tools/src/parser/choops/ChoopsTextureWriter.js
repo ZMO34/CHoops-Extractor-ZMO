@@ -1,13 +1,15 @@
 const path = require('path');
 const uuid = require('uuid').v4;
 const fs = require('fs/promises');
-const { exec } = require('child_process');
+const fsBase = require('fs');
+const { execFile } = require('child_process');
 
 const envPathUtil = require('../../util/envPathUtil');
 
 class ChoopsTextureWriter {
-    constructor() {
-
+    constructor(options = {}) {
+        this._dds2gtfPathPromise = null;
+        this.tempDir = options.tempDir || null;
     };
 
     async toFileFromGtf(gtfData, file) {
@@ -45,23 +47,17 @@ class ChoopsTextureWriter {
     };
 
     async toFileFromDDSPath(ddsPath, file) {
+        const tempGtfFileName = await this.toGtfFromDDS(ddsPath, file.name)
+        const gtfData = await fs.readFile(tempGtfFileName);
+
         try {
-            const tempGtfFileName = await this.toGtfFromDDS(ddsPath, file.name)
-            const gtfData = await fs.readFile(tempGtfFileName);
-    
-            try {
-                fs.rm(tempGtfFileName);
-            }
-            catch (err) {
-                console.error(err);
-            }
-    
-            return this.toFileFromGtf(gtfData, file);
+            await fs.rm(tempGtfFileName, { force: true });
         }
         catch (err) {
             console.error(err);
-            return null;
         }
+
+        return this.toFileFromGtf(gtfData, file);
     };
 
     async toPackageFileFromGtf(gtfData, packageFile) {
@@ -80,55 +76,93 @@ class ChoopsTextureWriter {
         packageFile.header.writeUInt32BE(gtfData.readUInt32BE(0x2C), 0x6C);
 
         packageFile.header.writeUInt32BE(gtfData.readUInt32BE(0x20), 0x90);
-        // file.dataBlocks[0].isChanged = true;
 
         const offsetToTexture = gtfData.readUInt32BE(0x10);
-
-        // file.dataBlocks[1].length = gtfData.length - offsetToTexture;
         packageFile.data = gtfData.slice(offsetToTexture);
-        // file.dataBlocks[1].isChanged = true;
-        
-        // file.isChanged = true;
     };
 
     async toPackageFileFromDDSPath(ddsPath, packageFile) {
+        const tempGtfFileName = await this.toGtfFromDDS(ddsPath, packageFile.name)
+        const gtfData = await fs.readFile(tempGtfFileName);
+
         try {
-            const tempGtfFileName = await this.toGtfFromDDS(ddsPath, packageFile.name)
-            const gtfData = await fs.readFile(tempGtfFileName);
-    
-            try {
-                fs.rm(tempGtfFileName);
-            }
-            catch (err) {
-                console.error(err);
-            }
-    
-            return this.toPackageFileFromGtf(gtfData, packageFile);
+            await fs.rm(tempGtfFileName, { force: true });
         }
         catch (err) {
             console.error(err);
-            return null;
         }
+
+        return this.toPackageFileFromGtf(gtfData, packageFile);
     };
 
-    toGtfFromDDS(ddsPath, name) {
-        return new Promise(async (resolve, reject) => {
-            const guid = uuid();
-            const envPath = await envPathUtil.getEnvPath();
+    async _getTempDir() {
+        if (this.tempDir) return this.tempDir;
+        const envPath = await envPathUtil.getEnvPath();
+        this.tempDir = envPath.temp;
+        return this.tempDir;
+    };
 
-            const fileNameFormatted = `${guid}_${name}`;
-            const tempDdsFileName = ddsPath;
-            const tempGtfFileName = path.join(envPath.temp, `${fileNameFormatted}.gtf`);
+    async _getDds2GtfPath() {
+        if (this._dds2gtfPathPromise) return this._dds2gtfPathPromise;
 
-            const pathToGtfExe = process.pkg ? 'dds2gtf.exe' : path.join(__dirname, '../../../lib/dds2gtf.exe');
-            exec(`${pathToGtfExe} -v -z -o "${tempGtfFileName}" "${tempDdsFileName}"`, async (err, out, stderr) => {
+        this._dds2gtfPathPromise = (async () => {
+            const candidates = [];
+
+            if (process.pkg) {
+                const exeDir = path.dirname(process.execPath);
+                candidates.push(path.join(exeDir, 'dds2gtf.exe'));
+                candidates.push(path.join(exeDir, 'lib', 'dds2gtf.exe'));
+                candidates.push(path.join(process.cwd(), 'dds2gtf.exe'));
+                candidates.push(path.join(process.cwd(), 'lib', 'dds2gtf.exe'));
+            }
+
+            candidates.push(path.join(__dirname, '../../../lib/dds2gtf.exe'));
+            candidates.push(path.join(__dirname, '../../../../2k-tools/lib/dds2gtf.exe'));
+
+            for (const candidate of candidates) {
+                if (!fsBase.existsSync(candidate)) continue;
+
+                // pkg assets inside /snapshot are not directly executable by Windows.
+                // If a future packaging change exposes the asset only there, copy it
+                // out to the writable temp directory first.
+                if (process.pkg && candidate.toLowerCase().indexOf('snapshot') >= 0) {
+                    const tempDir = await this._getTempDir();
+                    const extractedExePath = path.join(tempDir, 'choops-extractor-dds2gtf.exe');
+                    await fs.mkdir(tempDir, { recursive: true });
+                    await fs.copyFile(candidate, extractedExePath);
+                    return extractedExePath;
+                }
+
+                return candidate;
+            }
+
+            throw new Error(`Cannot find dds2gtf.exe. Checked: ${candidates.join(', ')}`);
+        })();
+
+        return this._dds2gtfPathPromise;
+    };
+
+    async toGtfFromDDS(ddsPath, name) {
+        const guid = uuid();
+        const tempDir = await this._getTempDir();
+        await fs.mkdir(tempDir, { recursive: true });
+
+        const safeName = String(name || 'texture').replace(/[^a-zA-Z0-9_.-]/g, '_');
+        const tempGtfFileName = path.join(tempDir, `${guid}_${safeName}.gtf`);
+        const pathToGtfExe = await this._getDds2GtfPath();
+
+        return new Promise((resolve, reject) => {
+            execFile(pathToGtfExe, ['-v', '-z', '-o', tempGtfFileName, ddsPath], (err) => {
                 if (err) {
-                    console.log(err);
-                    reject(err);
+                    reject(new Error(
+                        `dds2gtf failed for ${ddsPath}. `
+                        + `${err.message || err}. `
+                        + `Resolved dds2gtf path: ${pathToGtfExe}`
+                    ));
+                    return;
                 }
-                else {
-                    resolve(tempGtfFileName);
-                }
+
+                resolve(tempGtfFileName);
             });
         });
     };
