@@ -22,6 +22,31 @@ const writeFile = util.promisify(fs.writeFile);
 
 const MAX_DATAFILE_CHUNK_SIZE = 0x40000000;
 
+function alignLength(length, alignment) {
+    if (!alignment || length % alignment === 0) return length;
+    return (Math.floor(length / alignment) + 1) * alignment;
+}
+
+function makeRawWriter(buffer, alignment) {
+    const allDataLength = buffer.length;
+    const totalLength = alignLength(allDataLength, alignment);
+
+    return {
+        lengthInArchive: {
+            mainDataLength: allDataLength,
+            allDataLength,
+            totalLength
+        },
+        createStream: () => {
+            const paddingLength = totalLength - allDataLength;
+            return Readable.from(paddingLength > 0
+                ? [buffer, Buffer.alloc(paddingLength)]
+                : [buffer]
+            );
+        }
+    };
+}
+
 class ChoopsArchiveWriter {
     constructor(controller) {
         this.controller = controller;
@@ -97,6 +122,9 @@ class ChoopsArchiveWriter {
             if (entry.original.offset !== entry.offset && entry.original.location !== entry.location) {
                 return true;
             }
+            if (entry.rawReplacementBuffer !== undefined && entry.rawReplacementBuffer !== null) {
+                return true;
+            }
             if (entry.controller !== undefined && entry.controller !== null) {
                 return entry.controller.file.isChanged;
             }
@@ -108,6 +136,10 @@ class ChoopsArchiveWriter {
         let addedControllers = [];
 
         await Promise.all(changedEntries.map(async (entry) => {
+            if (entry.rawReplacementBuffer) {
+                return;
+            }
+
             if (!entry.controller) {
                 // if the entry has changed in the past but not now, read it so we have the file
                 // and we can get the IFFWriter
@@ -120,11 +152,13 @@ class ChoopsArchiveWriter {
             }
         }));
 
-        // make a list of IFFWriters for each changed file, to use later
+        // make a list of writers for each changed file, to use later
         const iffWriters = changedEntries.map((entry) => {
             return {
                 entry: entry,
-                writer: new IFFWriter(entry.controller.file, this.cache.archiveCache.alignment)
+                writer: entry.rawReplacementBuffer
+                    ? makeRawWriter(entry.rawReplacementBuffer, this.cache.archiveCache.alignment)
+                    : new IFFWriter(entry.controller.file, this.cache.archiveCache.alignment)
             }
         });
 
@@ -204,7 +238,7 @@ class ChoopsArchiveWriter {
         };
 
 
-        // append IFF data to 0G
+        // append data to 0G
         const streams = new Multistream(iffWriters.map((writer) => {
             return writer.writer.createStream();
         }));
