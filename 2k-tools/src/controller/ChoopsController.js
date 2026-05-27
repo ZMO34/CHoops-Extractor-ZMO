@@ -294,7 +294,9 @@ class ChoopsController extends EventEmitter {
     };
 
     async _saveCache() {
-        let cacheToSave = JSON.parse(JSON.stringify(this.cache));
+        let cacheToSave = JSON.parse(JSON.stringify(this.cache, (key, value) => {
+            return typeof value === 'bigint' ? value.toString() : value;
+        }));
 
         cacheToSave.tocCache.forEach((cacheEntry) => {
             delete cacheEntry.controller;
