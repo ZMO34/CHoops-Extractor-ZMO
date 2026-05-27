@@ -82,3 +82,38 @@ module.exports.decompress = (buf, decompressedSize, shiftAmount = 0x8) => {
 
     return output;
 };
+
+module.exports.compressLiteral = (buf) => {
+    if (!Buffer.isBuffer(buf)) {
+        throw new Error('H7A literal compress expected a Buffer input.');
+    }
+
+    const chunks = [];
+    let offset = 0;
+
+    while (offset < buf.length) {
+        const literalCount = Math.min(8, buf.length - offset);
+        // Descriptor bit 0 means literal in this H7A variant, so an all-zero descriptor
+        // followed by up to eight bytes is a valid, simple, deterministic stream.
+        chunks.push(Buffer.from([0x00]));
+        chunks.push(buf.slice(offset, offset + literalCount));
+        offset += literalCount;
+    }
+
+    return Buffer.concat(chunks);
+};
+
+module.exports.buildLiteralWrappedPayload = (decodedPayload, options = {}) => {
+    const shiftAmount = options.shiftAmount || 0x8;
+    const unknown0C = options.unknown0C || 0;
+    const compressedBody = module.exports.compressLiteral(decodedPayload);
+    const wrapper = Buffer.alloc(0x14, 0);
+
+    wrapper.writeUInt32BE(0x0E4837C3, 0x00);
+    wrapper.writeUInt32BE(decodedPayload.length, 0x04);
+    wrapper.writeUInt32BE(0x14 + compressedBody.length, 0x08);
+    wrapper.writeUInt32BE(unknown0C, 0x0C);
+    wrapper.writeUInt32BE(shiftAmount, 0x10);
+
+    return Buffer.concat([wrapper, compressedBody]);
+};
