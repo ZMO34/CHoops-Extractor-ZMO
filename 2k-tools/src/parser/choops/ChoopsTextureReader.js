@@ -20,6 +20,20 @@ class ChoopsTextureReader {
         return buf.readUInt32BE(offset);
     };
 
+    _normalizeGtfTextureHeader(textureGtfHeader) {
+        const normalized = Buffer.from(textureGtfHeader);
+
+        // CH2K8's uniform name/number atlases use format 0xA1. The extra 0x20 bit
+        // is a PS3 layout/normalization flag, while the underlying pixel format is
+        // the same 8-bit B8/luminance format that gtf2dds accepts as 0x81. Leaving
+        // 0xA1 in the synthetic GTF makes gtf2dds abort with "ERROR: Bad format".
+        if (normalized.length > 0 && normalized[0] === 0xA1) {
+            normalized[0] = 0x81;
+        }
+
+        return normalized;
+    };
+
     _getAtlasInfo(file) {
         if (!file || !file.dataBlocks || file.dataBlocks.length < 1) return null;
 
@@ -69,7 +83,7 @@ class ChoopsTextureReader {
     async toGTFFromFile(file) {
         if (!file || !file.dataBlocks || file.dataBlocks.length < 1) return null;
 
-        const textureGtfHeader = file.dataBlocks[0].data.slice(0x58, 0x70);
+        const textureGtfHeader = this._normalizeGtfTextureHeader(file.dataBlocks[0].data.slice(0x58, 0x70));
         const atlasInfo = this._getAtlasInfo(file);
         const textureDataBlockIndex = file.dataBlocks.length === 1 ? 0 : 1;
 
@@ -116,7 +130,7 @@ class ChoopsTextureReader {
 
     async toGTFFromTexture(texture) {
         if (!texture.header || !texture.data) { return null; }
-        const textureGtfHeader = texture.header.slice(0x58, 0x70);
+        const textureGtfHeader = this._normalizeGtfTextureHeader(texture.header.slice(0x58, 0x70));
 
         const gtfHeader = Buffer.alloc(0x30);
         gtfHeader.writeUInt32BE(0x01080000, 0x0);
