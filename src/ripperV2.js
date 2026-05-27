@@ -8,7 +8,7 @@ const { createLogger, format, transports } = require('winston');
 const IFFWriter = require('../2k-tools/src/parser/IFFWriter');
 const IFFType = require('../2k-tools/src/model/general/iff/IFFType');
 const ChoopsController = require('../2k-tools/src/controller/ChoopsController');
-const ChoopsTextureReader = require('../2k-tools/src/parser/choops/ChoopsTextureReader');
+const ChoopsTextureReader = require('../2k-tools/src/parser/choops/ChoopsTextureReaderInline');
 
 const hashUtil = require('../2k-tools/src/util/2kHashUtil');
 
