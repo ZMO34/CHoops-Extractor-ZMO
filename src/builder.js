@@ -1,6 +1,6 @@
 const fsOld = require('fs');
 const path = require('path');
-const { pipeline } = require('stream');
+const { pipeline, Readable } = require('stream');
 const fs = require('fs/promises');
 
 const IFFReader = require('../2k-tools/src/parser/IFFReader');
@@ -18,6 +18,49 @@ async function pathExists(filePath) {
     catch (err) {
         return false;
     }
+}
+
+async function parseStandardIffBuffer(buffer, name) {
+    if (!buffer || buffer.length < 4 || buffer.readUInt32BE(0) !== 0xFF3BEF94) {
+        throw new Error(`${name} is not a standard IFF resource and cannot be used for standard subfile overrides.`);
+    }
+
+    return await new Promise((resolve, reject) => {
+        const parser = new IFFReader();
+        pipeline(
+            Readable.from(buffer),
+            parser,
+            (err) => {
+                if (err) reject(err);
+                else resolve(parser.controller);
+            }
+        );
+    });
+}
+
+async function getWritableIffController(controller, iffName) {
+    const entry = await controller.getEntryByName(iffName);
+
+    if (entry.controller && typeof entry.controller.getFileRawData === 'function') {
+        return entry.controller;
+    }
+
+    const loaded = await controller.getFileController(iffName);
+    if (loaded && typeof loaded.getFileRawData === 'function') {
+        entry.controller = loaded;
+        return loaded;
+    }
+
+    if (Buffer.isBuffer(loaded)) {
+        const parsed = await parseStandardIffBuffer(loaded, iffName);
+        entry.controller = parsed;
+        return parsed;
+    }
+
+    throw new Error(
+        `${iffName} did not load as a writable standard IFF controller. `
+        + `Got ${loaded && loaded.constructor ? loaded.constructor.name : typeof loaded}.`
+    );
 }
 
 module.exports = async (pathToGameFiles, pathToMod) => {
@@ -111,7 +154,7 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                         type = IFFType.TYPES[splitName[1].toUpperCase()];
                     }
 
-                    let iffController = await controller.getFileController(iff);
+                    let iffController = await getWritableIffController(controller, iff);
                     let subfileController = await iffController.getFileController(subfileName, type);
 
                     if (!subfileController) {
@@ -186,8 +229,13 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                         type = IFFType.TYPES[splitName[1].toUpperCase()];
                     }
 
-                    let iffController = await controller.getFileController(iff);
+                    let iffController = await getWritableIffController(controller, iff);
                     let subfileController = await iffController.getFileRawData(subfileName, type);
+
+                    if (!subfileController) {
+                        console.error(`Error: Cannot find a subfile named "${subfileName}" in ${iff}. Skipping this file.`);
+                        continue;
+                    }
 
                     const toolWrappedReader = new ToolWrappedReader();
                     const wrappedFile = await new Promise((resolve, reject) => {
