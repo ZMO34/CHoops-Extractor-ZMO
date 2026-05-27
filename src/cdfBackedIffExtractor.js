@@ -2,6 +2,9 @@ const path = require('path');
 const fs = require('fs/promises');
 const mkdir = require('make-dir');
 
+const ddsUtil = require('./ddsUtil');
+const h7aCompressionUtil = require('../2k-tools/src/util/h7aCompressionUtil');
+
 const CDF_BACKED_IFF_MAGIC = 0xF0985030;
 const STANDARD_IFF_MAGIC = 0xFF3BEF94;
 const NAME_TABLE_MAGIC = 0xAA171516;
@@ -223,9 +226,43 @@ function parseH7aWrapper(payload) {
         shiftAmount,
         compressedDataOffset,
         compressedDataLength,
-        isCompressed: uncompressedLength !== compressedLength,
-        note: 'This is not a DDS and not a Sony GTF. It must be H7A-decompressed before DDS export. The previous exporter produced fake/garbled DDS by treating compressed bytes as DXT blocks.'
+        isCompressed: uncompressedLength !== compressedLength
     };
+}
+
+function mipPayloadSize(width, height, format, mipMapCount) {
+    return ddsUtil.payloadSizeFor(width, height, format, mipMapCount);
+}
+
+function inferDdsLayoutFromDecodedLength(decodedLength) {
+    const candidates = [
+        { width: 256, height: 256, format: 'DXT5', mipMapCount: 9 },
+        { width: 256, height: 128, format: 'DXT5', mipMapCount: 8 },
+        { width: 256, height: 256, format: 'DXT1', mipMapCount: 9 },
+        { width: 256, height: 128, format: 'DXT1', mipMapCount: 8 },
+        { width: 512, height: 256, format: 'DXT5', mipMapCount: 10 },
+        { width: 512, height: 256, format: 'DXT1', mipMapCount: 10 },
+        { width: 128, height: 128, format: 'DXT5', mipMapCount: 8 },
+        { width: 128, height: 128, format: 'DXT1', mipMapCount: 8 }
+    ];
+
+    return candidates.find((candidate) => {
+        return mipPayloadSize(candidate.width, candidate.height, candidate.format, candidate.mipMapCount) === decodedLength;
+    }) || null;
+}
+
+function decodeH7aTexturePayload(payload) {
+    const h7a = parseH7aWrapper(payload);
+    if (!h7a) return null;
+    if (h7a.compressedLength !== payload.length) {
+        throw new Error(`Invalid H7A compressed length: wrapper=0x${h7a.compressedLength.toString(16)}, actual=0x${payload.length.toString(16)}`);
+    }
+
+    const compressedBytes = payload.slice(h7a.compressedDataOffset, h7a.compressedDataOffset + h7a.compressedDataLength);
+    const decoded = h7aCompressionUtil.decompress(compressedBytes, h7a.uncompressedLength, h7a.shiftAmount);
+    const layout = inferDdsLayoutFromDecodedLength(decoded.length);
+
+    return { h7a, decoded, layout };
 }
 
 async function extractCdfBackedPair({ iffName, iffBuffer, cdfBuffer, outputDir, textureReader, logger, rawType }) {
@@ -239,6 +276,7 @@ async function extractCdfBackedPair({ iffName, iffBuffer, cdfBuffer, outputDir, 
         ddsConverted: 0,
         audioPayloads: 0,
         h7aCompressedTextures: 0,
+        h7aDecompressedTextures: 0,
         errors: []
     };
 
@@ -265,27 +303,59 @@ async function extractCdfBackedPair({ iffName, iffBuffer, cdfBuffer, outputDir, 
             await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.cdftex`), Buffer.concat([header, payload]));
             await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.h7a`), payload);
 
-            const h7a = parseH7aWrapper(payload);
-            if (h7a) {
-                await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.texture_manifest.json`), JSON.stringify({
-                    index: record.index,
-                    name: record.name,
-                    id: record.idHex,
-                    type: record.type,
-                    cdfSegmentHeaderLength: header.length,
-                    cdfPayloadLength: payload.length,
-                    h7a
-                }, null, 2));
-                summary.h7aCompressedTextures += 1;
-            }
+            let textureManifest = {
+                index: record.index,
+                name: record.name,
+                id: record.idHex,
+                type: record.type,
+                cdfSegmentHeaderLength: header.length,
+                cdfPayloadLength: payload.length
+            };
 
-            if (!rawType && validation.gtfPayload && textureReader) {
+            if (validation.h7aTexturePayload) {
+                summary.h7aCompressedTextures += 1;
+                try {
+                    const decodedTexture = decodeH7aTexturePayload(payload);
+                    if (decodedTexture) {
+                        const decodedPath = path.join(recordDir, `${safeName(record.name)}.decoded_texture.bin`);
+                        await fs.writeFile(decodedPath, decodedTexture.decoded);
+
+                        textureManifest.h7a = decodedTexture.h7a;
+                        textureManifest.decodedTextureLength = decodedTexture.decoded.length;
+                        textureManifest.decodedTexturePath = path.basename(decodedPath);
+                        textureManifest.ddsLayout = decodedTexture.layout;
+
+                        summary.h7aDecompressedTextures += 1;
+
+                        if (!rawType && decodedTexture.layout) {
+                            const dds = ddsUtil.wrapDds(decodedTexture.decoded, {
+                                width: decodedTexture.layout.width,
+                                height: decodedTexture.layout.height,
+                                fourCC: decodedTexture.layout.format,
+                                mipMapCount: decodedTexture.layout.mipMapCount
+                            });
+                            await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.dds`), dds);
+                            summary.ddsConverted += 1;
+                        }
+                        else if (!decodedTexture.layout) {
+                            summary.errors.push(`${record.index}:${record.name}: H7A decoded, but DDS layout could not be inferred for length 0x${decodedTexture.decoded.length.toString(16)}`);
+                        }
+                    }
+                }
+                catch (err) {
+                    textureManifest.h7aDecodeError = err.message || String(err);
+                    summary.errors.push(`${record.index}:${record.name}: H7A decode failed: ${err.message || err}`);
+                }
+            }
+            else if (!rawType && validation.gtfPayload && textureReader) {
                 const dds = await textureReader.toDDSFromGTFBuffer(payload, record.name, { quiet: true });
                 if (dds) {
                     await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.dds`), dds);
                     summary.ddsConverted += 1;
                 }
             }
+
+            await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.texture_manifest.json`), JSON.stringify(textureManifest, null, 2));
         }
         else if (record.type === 'AUDO') {
             await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.audio_payload.bin`), payload);
@@ -302,10 +372,6 @@ async function extractCdfBackedPair({ iffName, iffBuffer, cdfBuffer, outputDir, 
         }
     }
 
-    if (summary.h7aCompressedTextures > 0 && summary.ddsConverted === 0) {
-        summary.errors.push(`Skipped DDS export for ${summary.h7aCompressedTextures} H7A-compressed TXTR records; H7A decompression must be implemented before accurate transparent/color DDS export is possible.`);
-    }
-
     return { parsed, summary };
 }
 
@@ -316,5 +382,7 @@ module.exports = {
     parseCdfBackedIff,
     extractCdfBackedPair,
     getCdfFamily,
-    parseH7aWrapper
+    parseH7aWrapper,
+    decodeH7aTexturePayload,
+    inferDdsLayoutFromDecodedLength
 };
