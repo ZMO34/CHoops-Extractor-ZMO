@@ -9,6 +9,7 @@ const IFFWriter = require('../2k-tools/src/parser/IFFWriter');
 const IFFType = require('../2k-tools/src/model/general/iff/IFFType');
 const ChoopsController = require('../2k-tools/src/controller/ChoopsController');
 const ChoopsTextureReader = require('../2k-tools/src/parser/choops/ChoopsTextureReaderInline');
+const ripCdfBackedPairInline = require('./ripCdfBackedPairInline');
 
 const hashUtil = require('../2k-tools/src/util/2kHashUtil');
 
@@ -232,6 +233,26 @@ module.exports = async (inputPath, outputPath, options) => {
                 logger.info(message);
                 containerManifest.error = message;
                 masterManifest.containers.push(containerManifest);
+                continue;
+            }
+
+            const cdfPairResult = await ripCdfBackedPairInline({
+                iffDataName,
+                iffFileName,
+                iffBuffer: iffBuf,
+                controller,
+                outputDir: folderName,
+                textureReader,
+                logger,
+                options
+            });
+
+            if (cdfPairResult) {
+                containerManifest.cdfBacked = cdfPairResult.summary;
+                containerManifest.chunkCount += cdfPairResult.summary.extractedRecords || 0;
+                if (cdfPairResult.summary.family) {
+                    containerManifest.typeCounts[cdfPairResult.summary.family.toUpperCase()] = cdfPairResult.summary.extractedRecords || 0;
+                }
                 continue;
             }
 
