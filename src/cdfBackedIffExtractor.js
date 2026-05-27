@@ -2,12 +2,11 @@ const path = require('path');
 const fs = require('fs/promises');
 const mkdir = require('make-dir');
 
-const ddsUtil = require('./ddsUtil');
-
 const CDF_BACKED_IFF_MAGIC = 0xF0985030;
 const STANDARD_IFF_MAGIC = 0xFF3BEF94;
 const NAME_TABLE_MAGIC = 0xAA171516;
 const CDF_TEXTURE_MAGIC = 0x0E4837C3;
+const GTF_MAGIC = 0x01080000;
 const TYPE_HASHES = {
     0x1AEDDA1F: 'AUDO',
     0x5C36FB69: 'TXTR'
@@ -68,13 +67,8 @@ function relativeTarget(pointerOffset, pointerValue) {
 function parseNameTable(buffer, nameTableOffset, expectedCount) {
     const result = { present: false, offset: nameTableOffset, size: 0, names: [] };
 
-    if (nameTableOffset === null || nameTableOffset < 0 || nameTableOffset + 8 > buffer.length) {
-        return result;
-    }
-
-    if (readUInt32BE(buffer, nameTableOffset) !== NAME_TABLE_MAGIC) {
-        return result;
-    }
+    if (nameTableOffset === null || nameTableOffset < 0 || nameTableOffset + 8 > buffer.length) return result;
+    if (readUInt32BE(buffer, nameTableOffset) !== NAME_TABLE_MAGIC) return result;
 
     const bodySize = readUInt32LE(buffer, nameTableOffset + 4, 0);
     const bodyOffset = nameTableOffset + 8;
@@ -88,9 +82,7 @@ function parseNameTable(buffer, nameTableOffset, expectedCount) {
     const pointerTableStart = relativeTarget(4, readUInt32LE(body, 4, 0));
     const limit = Math.min(expectedCount || count, count);
 
-    if (pointerTableStart === null || pointerTableStart < 0 || pointerTableStart >= body.length) {
-        return result;
-    }
+    if (pointerTableStart === null || pointerTableStart < 0 || pointerTableStart >= body.length) return result;
 
     for (let i = 0; i < limit; i++) {
         const pointerOffset = pointerTableStart + (i * 4);
@@ -186,7 +178,7 @@ function parseCdfBackedIff(buffer) {
 function getCdfFamily(parsed) {
     const types = new Set(parsed.records.map((record) => record.type));
     if (types.size === 1 && types.has('AUDO')) return 'audio_interleaved_cdf';
-    if (types.has('TXTR')) return 'texture_gtf_cdf';
+    if (types.has('TXTR')) return 'texture_h7a_cdf';
     return 'unknown_cdf';
 }
 
@@ -200,85 +192,39 @@ function validateRecordAgainstCdf(record, cdfBuffer) {
         && record.segmentHeaderOffset + record.segmentHeaderLength <= cdfBuffer.length
         && record.payloadOffset + record.payloadLength <= cdfBuffer.length;
 
-    const contiguous = inBounds
-        && record.segmentHeaderOffset + record.segmentHeaderLength === record.payloadOffset;
-
-    const cdfTexturePayload = inBounds
-        && record.type === 'TXTR'
-        && readUInt32BE(cdfBuffer, record.payloadOffset) === CDF_TEXTURE_MAGIC;
-
+    const contiguous = inBounds && record.segmentHeaderOffset + record.segmentHeaderLength === record.payloadOffset;
+    const h7aTexturePayload = inBounds && record.type === 'TXTR' && readUInt32BE(cdfBuffer, record.payloadOffset) === CDF_TEXTURE_MAGIC;
+    const gtfPayload = inBounds && record.type === 'TXTR' && readUInt32BE(cdfBuffer, record.payloadOffset) === GTF_MAGIC;
     const audioLengthMatches = inBounds
         && record.type === 'AUDO'
         && record.segmentHeaderLength >= 0x24
         && readUInt32BE(cdfBuffer, record.segmentHeaderOffset + 0x18) === record.payloadLength;
 
-    return { inBounds, contiguous, cdfTexturePayload, gtfPayload: false, audioLengthMatches };
+    return { inBounds, contiguous, h7aTexturePayload, gtfPayload, audioLengthMatches };
 }
 
-function inferCdfTextureDimensions(sourceSize) {
-    const candidates = [
-        { width: 256, height: 128, format: 'DXT1' },
-        { width: 256, height: 256, format: 'DXT1' },
-        { width: 512, height: 256, format: 'DXT1' },
-        { width: 128, height: 128, format: 'DXT1' },
-        { width: 128, height: 64, format: 'DXT1' },
-        { width: 256, height: 128, format: 'DXT5' }
-    ];
+function parseH7aWrapper(payload) {
+    if (!payload || payload.length < 0x14 || readUInt32BE(payload, 0) !== CDF_TEXTURE_MAGIC) return null;
 
-    for (const candidate of candidates) {
-        const expected = ddsUtil.topMipSizeFor(candidate.width, candidate.height, candidate.format);
-        if (sourceSize >= expected) {
-            return candidate;
-        }
-    }
-
-    return { width: 256, height: 128, format: 'DXT1' };
-}
-
-function extractManualCdfTextureDds({ cdfBuffer, record, header, payload }) {
-    const fullRecord = Buffer.concat([header, payload]);
-    const imageOffsetInFullRecord = 0x78;
-    const imageOffsetInPayload = Math.max(0, imageOffsetInFullRecord - header.length);
-    const availableImageBytes = fullRecord.length - imageOffsetInFullRecord;
-
-    if (availableImageBytes <= 0 || imageOffsetInPayload >= payload.length) {
-        return null;
-    }
-
-    const inferred = inferCdfTextureDimensions(availableImageBytes);
-    const topMipSize = ddsUtil.topMipSizeFor(inferred.width, inferred.height, inferred.format);
-    if (availableImageBytes < topMipSize) {
-        return null;
-    }
-
-    const sourceImageData = payload.slice(imageOffsetInPayload, imageOffsetInPayload + topMipSize);
-    const deswizzled = ddsUtil.deswizzleBcTopMip(
-        sourceImageData,
-        inferred.width,
-        inferred.height,
-        inferred.format,
-        'block-rect'
-    );
+    const uncompressedLength = readUInt32BE(payload, 0x04, 0);
+    const compressedLength = readUInt32BE(payload, 0x08, 0);
+    const unknown0C = readUInt32BE(payload, 0x0C, 0);
+    const shiftAmount = readUInt32BE(payload, 0x10, 0);
+    const compressedDataOffset = 0x14;
+    const compressedDataLength = Math.max(0, Math.min(payload.length, compressedLength) - compressedDataOffset);
 
     return {
-        dds: ddsUtil.wrapDds(deswizzled, {
-            width: inferred.width,
-            height: inferred.height,
-            fourCC: inferred.format
-        }),
-        info: {
-            width: inferred.width,
-            height: inferred.height,
-            format: inferred.format,
-            swizzleMode: 'block-rect',
-            imageOffsetInFullRecord,
-            imageOffsetInPayload,
-            topMipSize,
-            fullRecordLength: fullRecord.length,
-            payloadLength: payload.length,
-            headerLength: header.length,
-            availableImageBytes
-        }
+        container: 'H7A-compressed texture payload',
+        magic: toHex(CDF_TEXTURE_MAGIC),
+        uncompressedLength,
+        compressedLength,
+        actualPayloadLength: payload.length,
+        unknown0C,
+        shiftAmount,
+        compressedDataOffset,
+        compressedDataLength,
+        isCompressed: uncompressedLength !== compressedLength,
+        note: 'This is not a DDS and not a Sony GTF. It must be H7A-decompressed before DDS export. The previous exporter produced fake/garbled DDS by treating compressed bytes as DXT blocks.'
     };
 }
 
@@ -292,6 +238,7 @@ async function extractCdfBackedPair({ iffName, iffBuffer, cdfBuffer, outputDir, 
         extractedRecords: 0,
         ddsConverted: 0,
         audioPayloads: 0,
+        h7aCompressedTextures: 0,
         errors: []
     };
 
@@ -312,23 +259,27 @@ async function extractCdfBackedPair({ iffName, iffBuffer, cdfBuffer, outputDir, 
 
         const header = cdfBuffer.slice(record.segmentHeaderOffset, record.segmentHeaderOffset + record.segmentHeaderLength);
         const payload = cdfBuffer.slice(record.payloadOffset, record.payloadOffset + record.payloadLength);
-        await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.cdf_header.bin`), header);
+        await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.cdf_segment_header.bin`), header);
 
         if (record.type === 'TXTR') {
-            await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.cdf_payload.bin`), payload);
+            await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.cdftex`), Buffer.concat([header, payload]));
+            await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.h7a`), payload);
 
-            let converted = false;
-            if (!rawType && validation.cdfTexturePayload) {
-                const manual = extractManualCdfTextureDds({ cdfBuffer, record, header, payload });
-                if (manual && manual.dds) {
-                    await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.dds`), manual.dds);
-                    await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.texture_manifest.json`), JSON.stringify(manual.info, null, 2));
-                    summary.ddsConverted += 1;
-                    converted = true;
-                }
+            const h7a = parseH7aWrapper(payload);
+            if (h7a) {
+                await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.texture_manifest.json`), JSON.stringify({
+                    index: record.index,
+                    name: record.name,
+                    id: record.idHex,
+                    type: record.type,
+                    cdfSegmentHeaderLength: header.length,
+                    cdfPayloadLength: payload.length,
+                    h7a
+                }, null, 2));
+                summary.h7aCompressedTextures += 1;
             }
 
-            if (!converted && !rawType && textureReader && readUInt32BE(payload, 0) === 0x01080000) {
+            if (!rawType && validation.gtfPayload && textureReader) {
                 const dds = await textureReader.toDDSFromGTFBuffer(payload, record.name, { quiet: true });
                 if (dds) {
                     await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.dds`), dds);
@@ -351,13 +302,19 @@ async function extractCdfBackedPair({ iffName, iffBuffer, cdfBuffer, outputDir, 
         }
     }
 
+    if (summary.h7aCompressedTextures > 0 && summary.ddsConverted === 0) {
+        summary.errors.push(`Skipped DDS export for ${summary.h7aCompressedTextures} H7A-compressed TXTR records; H7A decompression must be implemented before accurate transparent/color DDS export is possible.`);
+    }
+
     return { parsed, summary };
 }
 
 module.exports = {
     CDF_BACKED_IFF_MAGIC,
     STANDARD_IFF_MAGIC,
+    CDF_TEXTURE_MAGIC,
     parseCdfBackedIff,
     extractCdfBackedPair,
-    getCdfFamily
+    getCdfFamily,
+    parseH7aWrapper
 };
