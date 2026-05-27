@@ -229,6 +229,19 @@ function parseAudioHeader(header) {
     };
 }
 
+function parseCdfTextureSegmentHeader(header) {
+    if (!header || header.length < 0x14 || readUInt32BE(header, 0) !== CDF_TEXTURE_MAGIC) return null;
+
+    return {
+        magic: toHex(CDF_TEXTURE_MAGIC),
+        logicalHeaderLength: readUInt32BE(header, 0x04),
+        physicalHeaderLength: readUInt32BE(header, 0x08),
+        textureFormatCode: readUInt32BE(header, 0x0C),
+        textureConstant10: readUInt32BE(header, 0x10),
+        embeddedId: header.length >= 0x19 ? toHex(readUInt32BE(header, 0x15)) : null
+    };
+}
+
 function parseH7aWrapper(payload) {
     if (!payload || payload.length < 0x14 || readUInt32BE(payload, 0) !== CDF_TEXTURE_MAGIC) return null;
 
@@ -269,6 +282,27 @@ function maxMipCountFor(width, height) {
     return levels;
 }
 
+function scoreDdsLayoutCandidate(candidate) {
+    const fullMipCount = maxMipCountFor(candidate.width, candidate.height);
+    const aspectLog2 = Math.abs(Math.log2(candidate.width / candidate.height));
+    const portraitPenalty = candidate.width < candidate.height ? 3 : 0;
+    const extremeAspectPenalty = aspectLog2 > 3 ? 12 : (aspectLog2 > 2 ? 5 : 0);
+    const formatPenalty = candidate.format === 'DXT5' ? 0 : 1;
+    const mipPenalty = candidate.mipMapCount === fullMipCount ? 0 : (candidate.mipMapCount > 1 ? 1 : 2);
+    const commonLongSidePenalty = [128, 256, 512, 1024].includes(Math.max(candidate.width, candidate.height)) ? 0 : 1;
+    const commonShortSidePenalty = [64, 128, 256, 512].includes(Math.min(candidate.width, candidate.height)) ? 0 : 1;
+
+    return (
+        (formatPenalty * 1000)
+        + (mipPenalty * 100)
+        + (aspectLog2 * 10)
+        + portraitPenalty
+        + extremeAspectPenalty
+        + commonLongSidePenalty
+        + commonShortSidePenalty
+    );
+}
+
 function inferDdsLayoutsFromDecodedLength(decodedLength) {
     const widths = [32, 64, 128, 256, 512, 1024, 2048];
     const heights = [32, 64, 128, 256, 512, 1024, 2048];
@@ -282,26 +316,22 @@ function inferDdsLayoutsFromDecodedLength(decodedLength) {
                 for (let mipMapCount = 1; mipMapCount <= maxMips; mipMapCount++) {
                     const payloadSize = mipPayloadSize(width, height, format, mipMapCount);
                     if (payloadSize !== decodedLength) continue;
-                    matches.push({ width, height, format, mipMapCount, payloadSize });
+                    const match = { width, height, format, mipMapCount, payloadSize };
+                    match.score = scoreDdsLayoutCandidate(match);
+                    matches.push(match);
                 }
             }
         }
     }
 
     matches.sort((a, b) => {
-        const formatScoreA = a.format === 'DXT5' ? 0 : 1;
-        const formatScoreB = b.format === 'DXT5' ? 0 : 1;
-        if (formatScoreA !== formatScoreB) return formatScoreA - formatScoreB;
-
-        const mipScoreA = a.mipMapCount === maxMipCountFor(a.width, a.height) ? 0 : 1;
-        const mipScoreB = b.mipMapCount === maxMipCountFor(b.width, b.height) ? 0 : 1;
-        if (mipScoreA !== mipScoreB) return mipScoreA - mipScoreB;
+        if (a.score !== b.score) return a.score - b.score;
 
         const areaA = a.width * a.height;
         const areaB = b.width * b.height;
         if (areaA !== areaB) return areaA - areaB;
 
-        return a.width - b.width;
+        return b.width - a.width;
     });
 
     return matches;
@@ -387,6 +417,7 @@ async function extractCdfBackedPair({ iffName, iffBuffer, cdfBuffer, outputDir, 
 
         if (record.type === 'TXTR') {
             await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.cdftex`), Buffer.concat([header, payload]));
+            recordManifest.cdfTextureHeader = parseCdfTextureSegmentHeader(header);
 
             if (validation.h7aTexturePayload) {
                 await fs.writeFile(path.join(recordDir, `${safeName(record.name)}.h7a`), payload);
