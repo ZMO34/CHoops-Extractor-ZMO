@@ -63,11 +63,20 @@ async function getWritableIffController(controller, iffName) {
     );
 }
 
-module.exports = async (pathToGameFiles, pathToMod) => {
-    const controller = new ChoopsController(pathToGameFiles);
+async function revertBuiltArchivesIfPresent(controller) {
     if (typeof controller.revertAll === 'function') {
         await controller.revertAll();
+        return;
     }
+
+    if (controller._archiveWriter && typeof controller._archiveWriter.revertAll === 'function') {
+        await controller._archiveWriter.revertAll();
+    }
+}
+
+module.exports = async (pathToGameFiles, pathToMod) => {
+    const controller = new ChoopsController(pathToGameFiles);
+    await revertBuiltArchivesIfPresent(controller);
     await controller.read();
 
     // Find if there are any IFFs at the mod base level
