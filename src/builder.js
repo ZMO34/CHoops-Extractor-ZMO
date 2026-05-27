@@ -22,7 +22,9 @@ async function pathExists(filePath) {
 
 module.exports = async (pathToGameFiles, pathToMod) => {
     const controller = new ChoopsController(pathToGameFiles);
-    await controller.revertAll();
+    if (typeof controller.revertAll === 'function') {
+        await controller.revertAll();
+    }
     await controller.read();
 
     // Find if there are any IFFs at the mod base level
