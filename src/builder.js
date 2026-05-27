@@ -8,6 +8,17 @@ const IFFType = require('../2k-tools/src/model/general/iff/IFFType');
 const ToolWrappedReader = require('../2k-tools/src/parser/ToolWrappedReader');
 const ChoopsController = require('../2k-tools/src/controller/ChoopsController');
 const ChoopsTextureWriter = require('../2k-tools/src/parser/choops/ChoopsTextureWriter');
+const cdfBackedIffRebuilder = require('./cdfBackedIffRebuilder');
+
+async function pathExists(filePath) {
+    try {
+        await fs.access(filePath);
+        return true;
+    }
+    catch (err) {
+        return false;
+    }
+}
 
 module.exports = async (pathToGameFiles, pathToMod) => {
     const controller = new ChoopsController(pathToGameFiles);
@@ -22,28 +33,60 @@ module.exports = async (pathToGameFiles, pathToMod) => {
         const stat = await fs.lstat(contentPath);
 
         if (stat.isFile()) {
-            if (path.extname(content).toLowerCase() === '.iff') {
-                // import entire IFF
-                let modIffController = await new Promise((resolve, reject) => {
-                    const parser = new IFFReader();
-        
-                    pipeline(
-                        fsOld.createReadStream(contentPath),
-                        parser,
-                        (err) => {
-                            if (err) reject(err);
-                            else resolve(parser.controller);
-                        }
-                    )
-                });
+            const ext = path.extname(content).toLowerCase();
+            if (ext === '.iff') {
+                const raw = await fs.readFile(contentPath);
+                if (raw.length >= 4 && raw.readUInt32BE(0) === 0xFF3BEF94) {
+                    // import entire standard IFF through the existing parser path
+                    let modIffController = await new Promise((resolve, reject) => {
+                        const parser = new IFFReader();
+            
+                        pipeline(
+                            fsOld.createReadStream(contentPath),
+                            parser,
+                            (err) => {
+                                if (err) reject(err);
+                                else resolve(parser.controller);
+                            }
+                        )
+                    });
 
-                let iffCacheEntry = await controller.getEntryByName(content);
-                iffCacheEntry.controller = modIffController;
-
+                    let iffCacheEntry = await controller.getEntryByName(content);
+                    iffCacheEntry.controller = modIffController;
+                    logFileReplacement(content, contentPath);
+                }
+                else {
+                    // CDF-backed metadata IFFs and other raw top-level resources are not
+                    // standard IFFs. Preserve the exact bytes and let the archive writer
+                    // append them as raw resources.
+                    let entry = await controller.getEntryByName(content);
+                    entry.rawReplacementBuffer = raw;
+                    logFileReplacement(content, contentPath);
+                }
+            }
+            else if (ext === '.cdf' || ext === '.bin') {
+                let entry = await controller.getEntryByName(content);
+                entry.rawReplacementBuffer = await fs.readFile(contentPath);
                 logFileReplacement(content, contentPath);
             }
         }
         else {
+            const baseIffPath = path.join(contentPath, `${content}.iff`);
+            const baseCdfPath = path.join(contentPath, `${content}.cdf`);
+
+            if (await pathExists(baseIffPath) && await pathExists(baseCdfPath)) {
+                const rebuiltPair = await cdfBackedIffRebuilder.rebuildCdfBackedPairFromFolder(contentPath);
+                if (rebuiltPair) {
+                    const iffEntry = await controller.getEntryByName(`${content}.iff`);
+                    const cdfEntry = await controller.getEntryByName(`${content}.cdf`);
+                    iffEntry.rawReplacementBuffer = rebuiltPair.iffBuffer;
+                    cdfEntry.rawReplacementBuffer = rebuiltPair.cdfBuffer;
+                    logFileReplacement(`${content}.iff`, `${contentPath} (${rebuiltPair.summary.modifiedRecords} modified CDF records)`);
+                    logFileReplacement(`${content}.cdf`, `${contentPath} (${rebuiltPair.summary.rebuiltCdfSize} bytes)`);
+                    continue;
+                }
+            }
+
             // walk the directory
             const iff = `${content}.iff`;
             const subContents = await fs.readdir(contentPath);
@@ -58,6 +101,7 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                     // import a piece of a subfile - it's a directory
                     const piecesToReplace = await fs.readdir(subContentPath);
                     let subfileName = subContent.substring(1);
+                    let type;
                     
                     if (subfileName.indexOf('.') >= 0) {
                         const splitName = subfileName.split('.');
@@ -132,6 +176,7 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                 else {
                     // import entire subfile
                     let subfileName = subContent;
+                    let type;
                     
                     if (subfileName.indexOf('.') >= 0) {
                         const splitName = subfileName.split('.');
