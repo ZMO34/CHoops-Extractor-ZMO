@@ -4,7 +4,7 @@ const mkdir = require('make-dir');
 
 const ripperV2 = require('./ripperV2');
 const cdfBackedIffExtractor = require('./cdfBackedIffExtractor');
-const ChoopsTextureReader = require('../2k-tools/src/parser/choops/ChoopsTextureReader');
+const ChoopsTextureReader = require('../2k-tools/src/parser/choops/ChoopsTextureReaderInline');
 
 function safeName(value) {
     return String(value || 'asset').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
