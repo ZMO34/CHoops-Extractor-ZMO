@@ -14,6 +14,7 @@ const scneObjExporter = require('./src/scneObjExporterStable');
 const splitPartExporter = require('./src/scneSplitPartExporter');
 const smartAssetScanner = require('./src/smartAssetScanner');
 const iffResearchTools = require('./src/iffResearchTools');
+const scneFloorInspector = require('./src/scneFloorInspector');
 const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
 
 program
@@ -216,6 +217,20 @@ program.command('export-scne-obj')
         else {
             await scneObjExporter.exportScneObj(scneFile, outputPath, options);
         }
+    });
+
+program.command('inspect-floor-scne')
+    .description('Inspect a floor.scne package and dump texture, model-part, material, and draw-run tables.')
+    .argument('<scne file>', 'Path to floor.scne')
+    .argument('<output path>', 'Output directory for floor SCNE manifests')
+    .action(async (scneFile, outputPath) => {
+        const result = await scneFloorInspector.inspectScneFloor(scneFile, outputPath);
+        console.log('[INSPECT-FLOOR-SCNE] Complete.');
+        console.log(`[INSPECT-FLOOR-SCNE] Textures: ${result.packageHeader.textureCount}`);
+        console.log(`[INSPECT-FLOOR-SCNE] Model parts: ${result.packageHeader.modelPartCount}`);
+        result.modelParts.forEach((part) => {
+            console.log(`[INSPECT-FLOOR-SCNE] part ${part.index}: ${part.name}, materials=${part.materialRecords.map((record) => record.name).join('|')}, drawRecords=${part.drawRunRecordCount}`);
+        });
     });
 
 program.command('probe')
