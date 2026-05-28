@@ -12,8 +12,31 @@ function fourCc(value) {
     return Buffer.from(value, 'ascii').readUInt32LE(0);
 }
 
+function normalizedFourCC(value) {
+    return String(value || '').trim().toUpperCase();
+}
+
 function blockBytesFor(fourCC) {
-    return fourCC === 'DXT1' || fourCC === 'BC1 ' ? 8 : 16;
+    const normalized = normalizedFourCC(fourCC);
+    return normalized === 'DXT1' || normalized === 'BC1' ? 8 : 16;
+}
+
+function isPowerOfTwo(value) {
+    return Number.isInteger(value) && value > 0 && (value & (value - 1)) === 0;
+}
+
+function maxMipCountFor(width, height) {
+    let levels = 1;
+    let w = width;
+    let h = height;
+
+    while (w > 1 || h > 1) {
+        w = Math.max(1, w >> 1);
+        h = Math.max(1, h >> 1);
+        levels += 1;
+    }
+
+    return levels;
 }
 
 function topMipSizeFor(width, height, fourCC) {
@@ -86,6 +109,74 @@ function parseDds(buffer) {
     };
 }
 
+function validateDdsImport(dds, options = {}) {
+    const warnings = [];
+    const errors = [];
+    const label = options.label || 'DDS';
+    const maxDimension = options.maxDimension || 4096;
+    const allowNoMipmaps = options.allowNoMipmaps !== false;
+    const supportedFormats = options.supportedFormats || ['DXT1', 'DXT3', 'DXT5', 'BC1', 'BC2', 'BC3'];
+    const normalizedFormat = normalizedFourCC(dds && dds.fourCC);
+
+    if (!dds) {
+        errors.push(`${label}: missing DDS data.`);
+        return { warnings, errors, normalizedFormat };
+    }
+
+    if (!Number.isInteger(dds.width) || !Number.isInteger(dds.height) || dds.width <= 0 || dds.height <= 0) {
+        errors.push(`${label}: invalid DDS dimensions ${dds.width}x${dds.height}.`);
+    }
+
+    if (dds.width > maxDimension || dds.height > maxDimension) {
+        errors.push(`${label}: ${dds.width}x${dds.height} exceeds the conservative PS3 import limit ${maxDimension}x${maxDimension}.`);
+    }
+
+    if (!isPowerOfTwo(dds.width) || !isPowerOfTwo(dds.height)) {
+        errors.push(`${label}: dimensions must be powers of two for stable PS3 GTF conversion. Got ${dds.width}x${dds.height}.`);
+    }
+
+    if (!supportedFormats.includes(normalizedFormat)) {
+        errors.push(`${label}: unsupported DDS compression ${normalizedFormat || '(none)'}. Use BC1/DXT1 or BC3/DXT5 for CH2K8 texture imports.`);
+    }
+
+    const mipMapCount = Math.max(1, dds.mipMapCount || 1);
+    const fullMipCount = dds && dds.width && dds.height ? maxMipCountFor(dds.width, dds.height) : 1;
+
+    if (mipMapCount > fullMipCount) {
+        errors.push(`${label}: mip count ${mipMapCount} is impossible for ${dds.width}x${dds.height}; max is ${fullMipCount}.`);
+    }
+
+    if (mipMapCount === 1 && !allowNoMipmaps) {
+        errors.push(`${label}: missing mipmaps. Save with generated mipmaps for stable in-game rendering.`);
+    }
+    else if (mipMapCount === 1) {
+        warnings.push(`${label}: no mipmaps detected. Higher-resolution textures are more stable with full mipmaps.`);
+    }
+    else if (mipMapCount !== fullMipCount) {
+        warnings.push(`${label}: partial mip chain detected (${mipMapCount}/${fullMipCount}). Full mipmaps are recommended for high-resolution imports.`);
+    }
+
+    if (supportedFormats.includes(normalizedFormat)) {
+        const expectedPayloadSize = payloadSizeFor(dds.width, dds.height, normalizedFormat, mipMapCount);
+        if (dds.payload.length !== expectedPayloadSize) {
+            errors.push(
+                `${label}: DDS payload size mismatch. Expected 0x${expectedPayloadSize.toString(16)} bytes for `
+                + `${dds.width}x${dds.height} ${normalizedFormat} mips=${mipMapCount}, got 0x${dds.payload.length.toString(16)}.`
+            );
+        }
+    }
+
+    return { warnings, errors, normalizedFormat, fullMipCount };
+}
+
+function assertDdsImportable(dds, options = {}) {
+    const result = validateDdsImport(dds, options);
+    if (result.errors.length > 0) {
+        throw new Error(result.errors.join('\n'));
+    }
+    return result;
+}
+
 function part1By1(value) {
     let x = value & 0x0000ffff;
     x = (x | (x << 8)) & 0x00ff00ff;
@@ -96,7 +187,7 @@ function part1By1(value) {
 }
 
 function morton2D(x, y) {
-    return (part1By1(x) | (part1By1(y) << 1)) >>> 0;
+    return (part1By1(x) | (part1By1(x === x ? y : y) << 1)) >>> 0;
 }
 
 function mortonRectIndex(x, y, width, height) {
@@ -200,6 +291,11 @@ module.exports = {
     payloadSizeFor,
     topMipSizeFor,
     blockBytesFor,
+    normalizedFourCC,
+    isPowerOfTwo,
+    maxMipCountFor,
+    validateDdsImport,
+    assertDdsImportable,
     deswizzleBcTopMip,
     swizzleBcTopMip
 };
