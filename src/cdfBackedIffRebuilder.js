@@ -24,6 +24,13 @@ function readUInt32BE(buffer, offset, fallback = null) {
     return buffer.readUInt32BE(offset);
 }
 
+function isUniformScale(original, replacement) {
+    if (!original || !replacement) return false;
+    if (replacement.width < original.width || replacement.height < original.height) return false;
+    if (replacement.width % original.width !== 0 || replacement.height % original.height !== 0) return false;
+    return (replacement.width / original.width) === (replacement.height / original.height);
+}
+
 function validateDdsAgainstOriginal(recordName, dds, originalPayload) {
     const decoded = cdfBackedIffExtractor.decodeH7aTexturePayload(originalPayload);
     if (!decoded || !decoded.layout) {
@@ -31,18 +38,39 @@ function validateDdsAgainstOriginal(recordName, dds, originalPayload) {
     }
 
     const expected = decoded.layout;
-    const actualFormat = String(dds.fourCC).trim();
-    const expectedFormat = String(expected.format).trim();
+    const actualFormat = ddsUtil.normalizedFourCC(dds.fourCC);
+    const expectedFormat = ddsUtil.normalizedFourCC(expected.format);
 
-    if (dds.width !== expected.width || dds.height !== expected.height || dds.mipMapCount !== expected.mipMapCount || actualFormat !== expectedFormat) {
+    ddsUtil.assertDdsImportable(dds, {
+        label: `${recordName}.dds`,
+        allowNoMipmaps: false,
+        maxDimension: 4096,
+        supportedFormats: [expectedFormat]
+    });
+
+    if (actualFormat !== expectedFormat) {
+        throw new Error(`${recordName}.dds format mismatch. Expected ${expectedFormat}, got ${actualFormat}.`);
+    }
+
+    const sameDimensions = dds.width === expected.width && dds.height === expected.height;
+    const uniformUpscale = isUniformScale(expected, dds);
+
+    if (!sameDimensions && !uniformUpscale) {
         throw new Error(
-            `${recordName}.dds layout mismatch. `
-            + `Expected ${expected.width}x${expected.height} ${expectedFormat} mips=${expected.mipMapCount}, `
-            + `got ${dds.width}x${dds.height} ${actualFormat} mips=${dds.mipMapCount}.`
+            `${recordName}.dds dimensions must either match the original or be a uniform power-of-two upscale. `
+            + `Original ${expected.width}x${expected.height}, got ${dds.width}x${dds.height}.`
         );
     }
 
-    const expectedPayloadSize = ddsUtil.payloadSizeFor(expected.width, expected.height, expected.format, expected.mipMapCount);
+    const fullMipCount = ddsUtil.maxMipCountFor(dds.width, dds.height);
+    if (dds.mipMapCount !== fullMipCount) {
+        throw new Error(
+            `${recordName}.dds must have a full mip chain for stable high-resolution CDF rebuilds. `
+            + `Expected ${fullMipCount} mips for ${dds.width}x${dds.height}, got ${dds.mipMapCount}.`
+        );
+    }
+
+    const expectedPayloadSize = ddsUtil.payloadSizeFor(dds.width, dds.height, expectedFormat, dds.mipMapCount);
     if (dds.payload.length !== expectedPayloadSize) {
         throw new Error(
             `${recordName}.dds payload size mismatch. Expected 0x${expectedPayloadSize.toString(16)}, `
@@ -50,7 +78,19 @@ function validateDdsAgainstOriginal(recordName, dds, originalPayload) {
         );
     }
 
-    return decoded;
+    return {
+        decoded,
+        layout: {
+            width: dds.width,
+            height: dds.height,
+            format: expectedFormat,
+            mipMapCount: dds.mipMapCount,
+            highResolutionScale: sameDimensions ? 1 : dds.width / expected.width,
+            originalWidth: expected.width,
+            originalHeight: expected.height,
+            originalMipMapCount: expected.mipMapCount
+        }
+    };
 }
 
 async function buildH7aPayloadFromDds(recordDir, recordName, originalPayload) {
@@ -61,7 +101,7 @@ async function buildH7aPayloadFromDds(recordDir, recordName, originalPayload) {
     if (!originalWrapper) return originalPayload;
 
     const dds = ddsUtil.parseDds(await fs.readFile(ddsPath));
-    validateDdsAgainstOriginal(recordName, dds, originalPayload);
+    const validation = validateDdsAgainstOriginal(recordName, dds, originalPayload);
 
     return h7aCompressionUtil.buildLiteralWrappedPayload(dds.payload, {
         shiftAmount: originalWrapper.shiftAmount || 0x8,
