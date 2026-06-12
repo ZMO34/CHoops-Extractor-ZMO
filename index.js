@@ -16,11 +16,15 @@ const smartAssetScanner = require('./src/smartAssetScanner');
 const iffResearchTools = require('./src/iffResearchTools');
 const scneFloorInspector = require('./src/scneFloorInspector');
 const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
+const gameProfiles = require('./2k-tools/src/util/gameProfiles');
+
+const supportedGameNames = gameProfiles.getSupportedGameNames().join(', ');
+const gameOptionHelp = `Specify which game archive profile to use. Supported values: ${supportedGameNames}`;
 
 program
     .name('choops-extractor')
-    .version('0.5.8')
-    .description('A command line utility to extract College Hoops 2k8 (PS3) textures, CDF/IFF pairs, audio payloads, and more.');
+    .version('0.5.9')
+    .description('A command line utility to extract and research PS3 2K Sports IFF/CDF archives.');
 
 program.command('smart-scan')
     .description('Recursively scan IFF/CDF/BIN containers and generate evidence-based structural manifests.')
@@ -96,21 +100,20 @@ program.command('scan-refs')
     });
 
 program.command('rip')
-    .description('Rip all or some of the game files to the specified output directory.')
-    .argument('<path to game files>', 'Path to Choops game files directory (must include USRDIR in path)')
+    .description('Rip all or some game archive files to the specified output directory.')
+    .argument('<path to game files>', 'Path to game files directory, usually PS3_GAME/USRDIR')
     .argument('<output path>', 'Path to output the game files')
     .option('-c, --cache', 'Force cache rebuild')
     .option('--build-cache', 'Compatibility alias for --cache')
-    .option('-i, --index <number>', 'IFF file to rip (by index)')
-    .option('-f, --file <string>', 'IFF file to rip (by name, include .iff on the end)')
-    .option('--iff-only', 'Only rip IFFs, do not rip individual files within them')
+    .option('-i, --index <number>', 'IFF file to rip by archive index')
+    .option('-f, --file <string>', 'IFF/CDF/BIN file to rip by name or generated alias')
+    .option('--iff-only', 'Only rip top-level containers, do not rip individual files within them')
     .option('--raw-iff', 'Do not decompress the IFF. Rip it as-is.')
     .option('--log-output <string>', 'Path to place the output log. Defaults to base output directory')
     .option('--show-console', 'Show the output in the console in addition to creating a log')
-    .option('--type <types...>', 'Only output files of certain type(s). Accepts multiple inputs separated by a space. '
-        + 'Supported types: UNKNOWN, TXTR, SCNE, AUDO, LAYT, MRKS, PRIV, TXT, DRCT, CLTH, AMBO, HILT, NAME, CDAN')
-    .option('--raw-type', 'Output the subfile as it is in the IFF. Will not process the type (Ex: Textures will not output as DDS).')
-    .option('--game-name <gameName>', 'Specify which game you are ripping (valid values are: choops2k8, nba2k8, nba2k9)')
+    .option('--type <types...>', 'Only output files of certain type(s). Accepts multiple inputs separated by a space. Supported types: UNKNOWN, TXTR, SCNE, AUDO, LAYT, MRKS, PRIV, TXT, DRCT, CLTH, AMBO, HILT, NAME, CDAN')
+    .option('--raw-type', 'Output the subfile as it is in the IFF. Will not process the type.')
+    .option('--game-name <gameName>', gameOptionHelp, 'choops2k8')
     .action(async (inputPath, outputPath, options) => {
         if (options.buildCache) {
             options.cache = true;
@@ -121,17 +124,17 @@ program.command('rip')
 
 program.command('extract-assets')
     .description('Extract model, database, roster, and animation candidate payloads from IFF/CDF containers.')
-    .argument('<path to game files>', 'Path to Choops game files directory (must include USRDIR in path)')
+    .argument('<path to game files>', 'Path to game files directory, usually PS3_GAME/USRDIR')
     .argument('<output path>', 'Path to output extracted assets')
     .option('-c, --cache', 'Force cache rebuild')
-    .option('-i, --index <number>', 'IFF/CDF file to scan (by index)')
-    .option('-f, --file <string>', 'IFF/CDF file to scan (by exact name)')
+    .option('-i, --index <number>', 'IFF/CDF file to scan by index')
+    .option('-f, --file <string>', 'IFF/CDF file to scan by exact name')
     .option('--category <categories...>', 'Asset categories to extract: models, database, rosters, animations')
     .option('--scan-all', 'Scan all files regardless of heuristics')
     .option('--dump-top-level-raw', 'Always dump raw top-level container data')
     .option('--include-all-unknown', 'Include assets even when category classification is unknown')
     .option('--max-probe-hits <number>', 'Maximum embedded compressed streams to dump from a container')
-    .option('--game-name <gameName>', 'Specify which game you are ripping (valid values are: choops2k8, nba2k8, nba2k9)')
+    .option('--game-name <gameName>', gameOptionHelp, 'choops2k8')
     .action(async (inputPath, outputPath, options) => {
         await assetExtractor(inputPath, outputPath, options);
     });
@@ -253,8 +256,9 @@ program.command('probe')
     });
 
 program.command('build-cache')
-    .description('Forces a cache build.')
-    .argument('<path to game files>', 'Path to Choops game files directory (must include USRDIR in path)')
+    .description('Force a profile-specific archive cache rebuild.')
+    .argument('<path to game files>', 'Path to game files directory, usually PS3_GAME/USRDIR')
+    .option('--game-name <gameName>', gameOptionHelp, 'choops2k8')
     .action(async (pathToGameFiles, options) => {
         await cache(pathToGameFiles, options);
     });
@@ -271,7 +275,7 @@ program.command('import')
 
 program.command('revert')
     .description('Revert a file (warning: cannot be undone!)')
-    .argument('<path to game files>', 'Path to Choops game files directory (must include USRDIR in path)')
+    .argument('<path to game files>', 'Path to game files directory, usually PS3_GAME/USRDIR')
     .argument('<iff file name>', 'Name of the IFF file to revert')
     .action(async (pathToGameFiles, iffFileName, options) => {
         await reverter.revertFile(pathToGameFiles, iffFileName, options);
@@ -279,7 +283,7 @@ program.command('revert')
 
 program.command('revert-all')
     .description('Revert the entire game archive (warning: cannot be undone!)')
-    .argument('<path to game files>', 'Path to Choops game files directory (must include USRDIR in path)')
+    .argument('<path to game files>', 'Path to game files directory, usually PS3_GAME/USRDIR')
     .action(async (pathToGameFiles, options) => {
         await reverter.revertAll(pathToGameFiles, options);
     });
