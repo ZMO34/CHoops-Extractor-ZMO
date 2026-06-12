@@ -11,7 +11,8 @@
   "scripts": {
     "pack": "pkg -t node18-win-x64 -o dist/choops-extractor.exe --compress GZip . && pkg -t node18-win-x64 -o dist/choops-gui.exe --compress GZip gui.js && node scripts/copy-native-tools.js",
     "gui": "node gui.js",
-    "roster": "node roster.js"
+    "roster": "node roster.js",
+    "roster-studio": "node src/rosterStudioServer.js"
   },
   "author": "",
   "license": "MIT",
