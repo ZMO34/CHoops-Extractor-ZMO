@@ -7,6 +7,7 @@ const studioSchema = require('./rosterStudioSchema');
 const TEAM_COLOR_START = studioSchema.TEAM_FIELDS.colorsAndMaterials.start;
 const TEAM_COLOR_WORDS = studioSchema.TEAM_FIELDS.colorsAndMaterials.count;
 const STRING_APPEND_SEARCH_START = 0x003CBFDC;
+const PLAYER_EMPTY_SENTINEL_INDEX = 0;
 
 const ASSET_FAMILIES = [
     { key: 'homeUniform', prefix: 'uh', label: 'Home uniform' },
@@ -142,6 +143,12 @@ function pointerIndex(buffer, fieldOffset, table) {
     return Math.floor((target - table.rawStart) / table.rowSize);
 }
 
+function playerSlotIndex(buffer, fieldOffset) {
+    const index = pointerIndex(buffer, fieldOffset, studioSchema.PLAYER_TABLE);
+    if (index === PLAYER_EMPTY_SENTINEL_INDEX) return null;
+    return index;
+}
+
 function teamResearchFields(payload, team) {
     const base = studioSchema.teamRowOffset(team.team_index);
     const rosterStart = studioSchema.TEAM_FIELDS.roster.rosterSlots.offsetStart;
@@ -150,8 +157,8 @@ function teamResearchFields(payload, team) {
         rowStart: studioSchema.hex(base),
         rivals: [0x4C, 0x50, 0x54, 0x58, 0x5C].map((offset, idx) => ({ slot: idx + 1, offset: `+0x${offset.toString(16).toUpperCase()}`, teamIndex: pointerIndex(payload, base + offset, studioSchema.TEAM_TABLE) })),
         coaches: [0x60, 0x64, 0x68].map((offset, idx) => ({ slot: idx === 0 ? 'Head Coach' : `Assistant ${idx}`, offset: `+0x${offset.toString(16).toUpperCase()}`, coachIndex: pointerIndex(payload, base + offset, studioSchema.COACH_TABLE) })),
-        rosterSlots: Array.from({ length: 16 }, (_, i) => ({ slot: i + 1, offset: `+0x${(rosterStart + i * 4).toString(16).toUpperCase()}`, playerIndex: pointerIndex(payload, base + rosterStart + i * 4, studioSchema.PLAYER_TABLE) })),
-        rotationSlots: Array.from({ length: 9 }, (_, i) => ({ slot: i + 1, offset: `+0x${(rotationStart + i * 4).toString(16).toUpperCase()}`, playerIndex: pointerIndex(payload, base + rotationStart + i * 4, studioSchema.PLAYER_TABLE) })),
+        rosterSlots: Array.from({ length: 16 }, (_, i) => ({ slot: i + 1, offset: `+0x${(rosterStart + i * 4).toString(16).toUpperCase()}`, playerIndex: playerSlotIndex(payload, base + rosterStart + i * 4) })),
+        rotationSlots: Array.from({ length: 9 }, (_, i) => ({ slot: i + 1, offset: `+0x${(rotationStart + i * 4).toString(16).toUpperCase()}`, playerIndex: playerSlotIndex(payload, base + rotationStart + i * 4) })),
         assetWords: [0x18C, 0x190, 0x194].map((offset) => ({ offset: `+0x${offset.toString(16).toUpperCase()}`, value: hex(payload.readUInt32BE(base + offset)) })),
         unknown188: hex(payload.readUInt32BE(base + 0x188))
     };
@@ -278,6 +285,11 @@ function writePaletteColor(buffer, teamIndex, slot, value, changes) {
 }
 
 function writeTablePointer(buffer, fieldOffset, table, index, plus, changes, kind) {
+    if (index === null || index === undefined || index === '') {
+        buffer.writeUInt32BE(0, fieldOffset);
+        changes.push({ kind, fieldOffset: hex(fieldOffset), oldIndex: pointerIndex(buffer, fieldOffset, table), newIndex: null, empty: true });
+        return;
+    }
     const numericIndex = Number(index);
     if (!Number.isInteger(numericIndex) || numericIndex < 0 || numericIndex >= table.count) throw new Error(`${kind} index out of range.`);
     const oldIndex = pointerIndex(buffer, fieldOffset, table);
