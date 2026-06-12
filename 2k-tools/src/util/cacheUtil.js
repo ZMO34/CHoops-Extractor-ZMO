@@ -2,6 +2,7 @@ const path = require('path');
 const zlib = require('zlib');
 const fs = require('fs/promises');
 const envPathUtil = require('./envPathUtil');
+const gameProfiles = require('./gameProfiles');
 
 module.exports.buildAndSaveCache = (cacheName, data) => {
     return new Promise(async (resolve, reject) => {
@@ -41,15 +42,23 @@ module.exports.getCache = (cacheName, cachePathOverride) => {
 };
 
 module.exports.getFormattedCacheName = (gameName) => {
-    if (!gameName) {
-        gameName = 'default';
-    }
-
-    return `${gameName.replace(/\s+/g, '')}.cache`;
+    return gameProfiles.getProfile(gameName).cacheName;
 };
 
 module.exports.CACHES = {
     CHOOPS: {
-        cache: 'choops.cache'
+        cache: gameProfiles.getProfile('choops2k8').cacheName
+    },
+    NBA2K8: {
+        cache: gameProfiles.getProfile('nba2k8').cacheName
+    },
+    APF2K8: {
+        cache: gameProfiles.getProfile('apf2k8').cacheName
+    },
+    NHL2K8: {
+        cache: gameProfiles.getProfile('nhl2k8').cacheName
+    },
+    MLB2K8: {
+        cache: gameProfiles.getProfile('mlb2k8').cacheName
     }
 };
