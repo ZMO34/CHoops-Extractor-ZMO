@@ -211,6 +211,19 @@ function getSupportedGameNames() {
     return Object.keys(PROFILE_DEFINITIONS).filter((key) => key !== 'default');
 }
 
+function getSupportedGameProfiles() {
+    return getSupportedGameNames().map((id) => {
+        const profile = getProfile(id);
+        return {
+            id: profile.id,
+            displayName: profile.displayName,
+            cacheName: profile.cacheName,
+            archiveTocLayout: profile.archiveTocLayout,
+            aliases: profile.aliases || []
+        };
+    });
+}
+
 function addNameVariants(candidates, baseName, extensions) {
     candidates.add(baseName);
 
@@ -246,6 +259,7 @@ module.exports = {
     PROFILE_DEFINITIONS,
     getProfile,
     getSupportedGameNames,
+    getSupportedGameProfiles,
     generateCandidateNames,
     normalizeGameName
 };
