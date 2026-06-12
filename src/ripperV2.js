@@ -17,6 +17,33 @@ function cleanName(value) {
     return String(value || 'unnamed').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
 }
 
+function isNumericName(value) {
+    const baseName = String(value || '').replace(/\.(iff|cdf|bin)$/i, '');
+    return /^\d+$/.test(baseName);
+}
+
+function stripKnownExtension(value) {
+    return String(value || '').replace(/\.(iff|cdf|bin)$/i, '');
+}
+
+function getBestContainerName(entry) {
+    if (!entry) {
+        return 'unnamed';
+    }
+
+    if (entry.name && !isNumericName(entry.name)) {
+        return entry.name;
+    }
+
+    const aliases = Array.isArray(entry.aliases) ? entry.aliases : [];
+    const namedAlias = aliases.find((alias) => alias && !isNumericName(alias));
+    if (namedAlias) {
+        return namedAlias;
+    }
+
+    return entry.name || 'unnamed';
+}
+
 function typeCodeToFolder(typeCode) {
     const typeName = IFFType.typeToString(typeCode);
     return cleanName(typeName || 'UNKNOWN').toUpperCase();
@@ -173,8 +200,10 @@ module.exports = async (inputPath, outputPath, options) => {
         iffsToRead.push(controller.data[parseInt(options.index)]);
     }
     else if (options.file) {
+        const requested = stripKnownExtension(options.file).toLowerCase();
         iffsToRead = controller.data.filter((iff) => {
-            return iff.name === options.file;
+            const names = [iff.name, ...(iff.aliases || [])].map(stripKnownExtension).map((name) => name.toLowerCase());
+            return names.includes(requested);
         });
     }
     else {
@@ -192,17 +221,22 @@ module.exports = async (inputPath, outputPath, options) => {
     };
 
     for (const iffData of iffsToRead) {
-        logger.info(`${counter} - ${iffData.name} (NameHash=${iffData.nameHash.toString(16).padStart(8, '0')}, GameFileIndex=${iffData.location}, GameFileOffset=${iffData.offset.toString(16)})`);
+        const bestContainerName = getBestContainerName(iffData);
+        const canonicalName = iffData.name;
+        const aliases = Array.isArray(iffData.aliases) ? iffData.aliases : [];
+        logger.info(`${counter} - ${bestContainerName} (ArchiveName=${canonicalName}, Aliases=${aliases.join('|') || 'none'}, NameHash=${iffData.nameHash.toString(16).padStart(8, '0')}, GameFileIndex=${iffData.location}, GameFileOffset=${iffData.offset.toString(16)})`);
         
-        const iffDataName = iffData.name.indexOf('.') >= 0 ? iffData.name.slice(0, iffData.name.length - 4) : iffData.name;
-        const iffFileName = iffData.name.indexOf('.') >= 0 ? iffData.name : `${iffData.name}.iff`;
+        const iffDataName = stripKnownExtension(bestContainerName);
+        const iffFileName = bestContainerName.indexOf('.') >= 0 ? bestContainerName : `${bestContainerName}.iff`;
         const folderName = path.join(outputPath, cleanName(iffDataName));
         const containerDir = sortByType ? path.join(folderName, '_container') : folderName;
         const manifestsDir = path.join(folderName, '_manifests');
 
         const containerManifest = {
             index: counter,
-            name: iffData.name,
+            name: bestContainerName,
+            originalArchiveName: canonicalName,
+            aliases,
             baseName: iffDataName,
             iffFileName,
             nameHash: iffData.nameHash.toString(16).padStart(8, '0'),
@@ -225,11 +259,11 @@ module.exports = async (inputPath, outputPath, options) => {
             // even if the parser cannot understand one specific IFF/CDF/BIN payload yet.
             let iffBuf = null;
             try {
-                iffBuf = await controller.getFileRawData(iffData.name);
+                iffBuf = await controller.getFileRawData(canonicalName);
                 await fs.writeFile(path.join(containerDir, iffFileName), iffBuf);
             }
             catch (err) {
-                const message = `Raw container extraction failed for ${iffData.name}: ${err.message || err}`;
+                const message = `Raw container extraction failed for ${bestContainerName}: ${err.message || err}`;
                 logger.info(message);
                 containerManifest.error = message;
                 masterManifest.containers.push(containerManifest);
@@ -259,13 +293,13 @@ module.exports = async (inputPath, outputPath, options) => {
             if (options.iffOnly) {
                 if (!options.rawIff) {
                     try {
-                        const iff = await controller.getFileController(iffData.name);
+                        const iff = await controller.getFileController(canonicalName);
                         if (!(iff instanceof Buffer)) {
                             await writeRebuiltIff(iff, path.join(containerDir, iffFileName));
                         }
                     }
                     catch (err) {
-                        const message = `IFF parse/rebuild failed for ${iffData.name}; kept raw file. ${err.message || err}`;
+                        const message = `IFF parse/rebuild failed for ${bestContainerName}; kept raw file. ${err.message || err}`;
                         logger.info(message);
                         containerManifest.error = message;
                     }
@@ -274,10 +308,10 @@ module.exports = async (inputPath, outputPath, options) => {
             else {
                 let iff = null;
                 try {
-                    iff = await controller.getFileController(iffData.name);
+                    iff = await controller.getFileController(canonicalName);
                 }
                 catch (err) {
-                    const message = `IFF parse failed for ${iffData.name}; kept raw file and continuing. ${err.message || err}`;
+                    const message = `IFF parse failed for ${bestContainerName}; kept raw file and continuing. ${err.message || err}`;
                     logger.info(message);
                     containerManifest.error = message;
                     masterManifest.containers.push(containerManifest);
@@ -330,7 +364,7 @@ module.exports = async (inputPath, outputPath, options) => {
                                         }
                                     }
                                     catch (err) {
-                                        logger.info(`SCNE texture extraction failed for ${iffData.name}/${file.name}: ${err.message || err}`);
+                                        logger.info(`SCNE texture extraction failed for ${bestContainerName}/${file.name}: ${err.message || err}`);
                                     }
                                 }
                             }
@@ -340,7 +374,7 @@ module.exports = async (inputPath, outputPath, options) => {
                             containerManifest.typeCounts[typeKey] = (containerManifest.typeCounts[typeKey] || 0) + 1;
 
                             const chunkManifest = makeChunkManifest({
-                                containerName: iffData.name,
+                                containerName: bestContainerName,
                                 file,
                                 fileType,
                                 rawFileName,
@@ -356,14 +390,14 @@ module.exports = async (inputPath, outputPath, options) => {
                         }
                     }
                     catch (err) {
-                        logger.info(`Chunk extraction failed for ${iffData.name}; kept raw file. ${err.message || err}`);
+                        logger.info(`Chunk extraction failed for ${bestContainerName}; kept raw file. ${err.message || err}`);
                         containerManifest.error = '' + err;
                     }
                 }
             }
         }
         catch (err) {
-            const message = `Container rip failed for ${iffData.name}; continuing. ${err.message || err}`;
+            const message = `Container rip failed for ${bestContainerName}; continuing. ${err.message || err}`;
             logger.info(message);
             containerManifest.error = message;
         }
@@ -374,7 +408,7 @@ module.exports = async (inputPath, outputPath, options) => {
                     await writeJson(path.join(manifestsDir, 'container_manifest.json'), containerManifest);
                 }
                 catch (err) {
-                    logger.info(`Failed to write manifest for ${iffData.name}: ${err.message || err}`);
+                    logger.info(`Failed to write manifest for ${bestContainerName}: ${err.message || err}`);
                 }
             }
 
