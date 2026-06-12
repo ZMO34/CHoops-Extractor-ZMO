@@ -8,6 +8,7 @@ const TEAM_COLOR_START = studioSchema.TEAM_FIELDS.colorsAndMaterials.start;
 const TEAM_COLOR_WORDS = studioSchema.TEAM_FIELDS.colorsAndMaterials.count;
 const STRING_APPEND_SEARCH_START = 0x003CBFDC;
 const PLAYER_EMPTY_SENTINEL_INDEX = 0;
+const PLAYER_EMPTY_UI_INDEX = -1;
 
 const ASSET_FAMILIES = [
     { key: 'homeUniform', prefix: 'uh', label: 'Home uniform' },
@@ -39,6 +40,20 @@ const STRING_FIELDS = {
     studentSection: studioSchema.TEAM_FIELDS.spirit.studentSection,
     midnightMadness: studioSchema.TEAM_FIELDS.spirit.midnightMadness
 };
+
+function emptyPlayerOption() {
+    return {
+        player_index: PLAYER_EMPTY_UI_INDEX,
+        row_offset: '',
+        first_name: 'Empty',
+        last_name: '/ None',
+        display_name: 'Empty / None',
+        jersey_number: '',
+        height_inches: '',
+        position_code: '',
+        position: ''
+    };
+}
 
 function pad3(value) {
     return String(Number(value) || 0).padStart(3, '0');
@@ -145,7 +160,8 @@ function pointerIndex(buffer, fieldOffset, table) {
 
 function playerSlotIndex(buffer, fieldOffset) {
     const index = pointerIndex(buffer, fieldOffset, studioSchema.PLAYER_TABLE);
-    if (index === PLAYER_EMPTY_SENTINEL_INDEX) return null;
+    if (index === null || index === undefined) return PLAYER_EMPTY_UI_INDEX;
+    if (index === PLAYER_EMPTY_SENTINEL_INDEX) return PLAYER_EMPTY_UI_INDEX;
     return index;
 }
 
@@ -285,14 +301,14 @@ function writePaletteColor(buffer, teamIndex, slot, value, changes) {
 }
 
 function writeTablePointer(buffer, fieldOffset, table, index, plus, changes, kind) {
-    if (index === null || index === undefined || index === '') {
+    const oldIndex = pointerIndex(buffer, fieldOffset, table);
+    const numericIndex = Number(index);
+    if (index === null || index === undefined || index === '' || numericIndex === PLAYER_EMPTY_UI_INDEX) {
         buffer.writeUInt32BE(0, fieldOffset);
-        changes.push({ kind, fieldOffset: hex(fieldOffset), oldIndex: pointerIndex(buffer, fieldOffset, table), newIndex: null, empty: true });
+        changes.push({ kind, fieldOffset: hex(fieldOffset), oldIndex, newIndex: null, empty: true });
         return;
     }
-    const numericIndex = Number(index);
     if (!Number.isInteger(numericIndex) || numericIndex < 0 || numericIndex >= table.count) throw new Error(`${kind} index out of range.`);
-    const oldIndex = pointerIndex(buffer, fieldOffset, table);
     const target = table.rawStart + numericIndex * table.rowSize + (plus || 0);
     writeRelativePointer(buffer, fieldOffset, target);
     changes.push({ kind, fieldOffset: hex(fieldOffset), oldIndex, newIndex: numericIndex });
@@ -335,6 +351,17 @@ function applyEdit(buffer, edit, changes) {
     throw new Error(`Unsupported edit kind: ${edit.kind}`);
 }
 
+function normalizeEdit(edit) {
+    if (edit && !edit.kind && edit.type) {
+        const out = { ...edit };
+        if (out.type === 'paletteSlot') out.kind = 'paletteColor';
+        else out.kind = out.type;
+        if (out.field && !out.key) out.key = out.field;
+        return out;
+    }
+    return edit;
+}
+
 function buildOutputBuffer(loaded, editedPayload) {
     if (loaded.sourceType === 'decrypted-save-userdata') {
         const out = Buffer.alloc(editedPayload.length + 4);
@@ -351,19 +378,19 @@ async function saveRosterCopy(rosterPath, outputPath, edits) {
     const loaded = await rosterTool.loadRosterPayload(rosterPath);
     const payload = Buffer.from(loaded.payload);
     const changes = [];
-    for (const edit of edits || []) applyEdit(payload, edit, changes);
+    for (const edit of edits || []) applyEdit(payload, normalizeEdit(edit), changes);
     const out = buildOutputBuffer(loaded, payload);
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.writeFile(outputPath, out);
-    return { outputPath, sourceType: loaded.sourceType, payloadSize: payload.length, outputSize: out.length, changes, warning: 'Saved copy only. Test in-game before using as a base.' };
+    return { outputPath, sourceType: loaded.sourceType, payloadSize: payload.length, outputSize: out.length, changes, applied: changes, warning: 'Saved copy only. Test in-game before using as a base.' };
 }
 
 function buildEditorState(loaded, decoded, assetIndex) {
-    const teams = decoded.teams.map((team) => ({ ...team, assets: availabilityForAsset(team.asset_id, assetIndex), palette: teamPaletteFromPayload(loaded.payload, team.team_index), research: teamResearchFields(loaded.payload, team) }));
+    const teams = decoded.teams.map((team) => ({ ...team, rosterIndex: team.team_index, rowIndex: team.team_index, assets: availabilityForAsset(team.asset_id, assetIndex), palette: teamPaletteFromPayload(loaded.payload, team.team_index), research: teamResearchFields(loaded.payload, team) }));
     return {
         source: { sourceType: loaded.sourceType, payloadSize: loaded.payload.length, lengthPrefix: loaded.lengthPrefix, note: 'Roster Studio includes built-in CH2K8 Edit School schema findings and save-copy research edits.' },
         counts: { players: decoded.players.length, teams: decoded.teams.length, arenas: decoded.arenas.length, coaches: decoded.coaches.length, rosterSlots: decoded.rosterSlots.length, conferences: studioSchema.CONFERENCE_TABLE.count },
-        players: decoded.players,
+        players: [emptyPlayerOption()].concat(decoded.players),
         teams,
         arenas: decoded.arenas,
         coaches: decoded.coaches,
