@@ -3,9 +3,10 @@ const Long = require('long');
 const fs = require('fs/promises');
 
 const heapUtil = require('./choops/choopsHeapUtil.js');
+const gameProfiles = require('./gameProfiles');
 
 let heapData, hashLookup;
-let generatedHashMapPromise = null;
+const generatedHashMapPromises = new Map();
 
 module.exports.heapPromise = new Promise(async (resolve, reject) => {
     heapData = await heapUtil.getHeap();
@@ -50,59 +51,44 @@ function rldic(theLong, shift, maskBit) {
     return theLong.rotateLeft(shift).and(new Long(0xFFFFFFFF, 0xFFFFFFFF, true).shiftRightUnsigned(maskBit + shift).shiftLeft(shift));
 };
 
-function addNameVariants(candidates, baseName, extensions = ['.iff']) {
-    candidates.add(baseName);
-
-    for (const extension of extensions) {
-        candidates.add(`${baseName}${extension}`);
-    }
+function normalizeGameName(gameName) {
+    return gameProfiles.getProfile(gameName).id;
 }
 
-function generateCandidateNames() {
-    const candidates = new Set();
-
-    for (let i = 0; i <= 999; i++) {
-        const id3 = i.toString().padStart(3, '0');
-        const id4 = i.toString().padStart(4, '0');
-
-        ['ua', 'uh', 'ux', 'selua', 'seluh', 'selux', 's', 'm'].forEach((prefix) => {
-            addNameVariants(candidates, `${prefix}${id3}`);
-        });
-
-        addNameVariants(candidates, `coach${id3}`);
-        addNameVariants(candidates, `h${id4}`);
-    }
-
-    return [...candidates];
+function generateCandidateNames(gameName) {
+    return gameProfiles.generateCandidateNames(gameName);
 };
 
-async function getGeneratedHashMap() {
-    if (!generatedHashMapPromise) {
-        generatedHashMapPromise = (async () => {
+async function getGeneratedHashMap(gameName) {
+    const profileId = normalizeGameName(gameName);
+
+    if (!generatedHashMapPromises.has(profileId)) {
+        generatedHashMapPromises.set(profileId, (async () => {
             const map = new Map();
 
-            for (const candidate of generateCandidateNames()) {
+            for (const candidate of generateCandidateNames(profileId)) {
                 const candidateHash = await module.exports.hash(candidate);
 
                 if (!map.has(candidateHash)) {
                     map.set(candidateHash, {
                         hash: candidateHash,
                         str: candidate,
-                        generated: true
+                        generated: true,
+                        gameName: profileId
                     });
                 }
             }
 
             return map;
-        })();
+        })());
     }
 
-    return generatedHashMapPromise;
+    return generatedHashMapPromises.get(profileId);
 };
 
 module.exports.generateCandidateNames = generateCandidateNames;
 
-module.exports.resolveCandidateName = async function(candidateName) {
+module.exports.resolveCandidateName = async function(candidateName, options = {}) {
     await this.hashLookupPromise;
 
     const namesToTry = new Set();
@@ -129,7 +115,8 @@ module.exports.resolveCandidateName = async function(candidateName) {
         return {
             hash,
             str: name,
-            generated: true
+            generated: true,
+            gameName: normalizeGameName(options.gameName)
         };
     }
 
@@ -151,11 +138,12 @@ module.exports.hashLookup = async function(hash, options = {}) {
         return null;
     }
 
-    const generatedHashMap = await getGeneratedHashMap();
+    const profileId = normalizeGameName(options.gameName);
+    const generatedHashMap = await getGeneratedHashMap(profileId);
     const generated = generatedHashMap.get(hash);
 
     if (generated) {
-        console.log(`Auto-resolved hash 0x${hash.toString(16)} -> ${generated.str}`);
+        console.log(`Auto-resolved ${profileId} hash 0x${hash.toString(16)} -> ${generated.str}`);
         return generated;
     }
 
