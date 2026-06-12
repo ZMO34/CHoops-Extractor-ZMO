@@ -23,23 +23,58 @@ function readBody(req) {
     });
 }
 
-function browse(kind) {
+function runPickerWith(command, args) {
     return new Promise((resolve, reject) => {
-        if (process.platform !== 'win32') {
-            reject(new Error('Browse buttons use Windows PowerShell dialogs. Type/paste paths manually on other platforms.'));
-            return;
-        }
-        const script = kind === 'file'
-            ? "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Filter='All files (*.*)|*.*'; if($d.ShowDialog() -eq 'OK'){Write-Output $d.FileName}"
-            : "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if($d.ShowDialog() -eq 'OK'){Write-Output $d.SelectedPath}";
-        const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: false });
+        const child = spawn(command, args, { windowsHide: false, detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
         let stdout = '';
         let stderr = '';
         child.stdout.on('data', chunk => stdout += chunk.toString('utf8'));
         child.stderr.on('data', chunk => stderr += chunk.toString('utf8'));
         child.on('error', reject);
-        child.on('close', code => code === 0 ? resolve(stdout.trim()) : reject(new Error(stderr || `Dialog failed: ${code}`)));
+        child.on('close', code => {
+            const value = stdout.trim();
+            if (code === 0 && value) resolve(value);
+            else reject(new Error(stderr.trim() || `File picker cancelled or failed with code ${code}.`));
+        });
     });
+}
+
+async function browse(kind) {
+    if (process.platform !== 'win32') {
+        throw new Error('Native Browse is currently Windows-only. Type or paste the path manually.');
+    }
+    const isFile = kind === 'file';
+    const script = `
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Application]::EnableVisualStyles()
+$form = New-Object System.Windows.Forms.Form
+$form.TopMost = $true
+$form.ShowInTaskbar = $false
+$form.StartPosition = 'CenterScreen'
+$form.Width = 1
+$form.Height = 1
+$form.Opacity = 0
+$form.Show()
+$form.Activate()
+if (${isFile ? '$true' : '$false'}) {
+  $d = New-Object System.Windows.Forms.OpenFileDialog
+  $d.Filter = 'Roster/save/IFF files (*.zip;*.iff;USERDATA;*.bin;*.dat)|*.zip;*.iff;USERDATA;*.bin;*.dat|All files (*.*)|*.*'
+  $d.CheckFileExists = $true
+  $d.Multiselect = $false
+  if ($d.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.FileName }
+} else {
+  $d = New-Object System.Windows.Forms.FolderBrowserDialog
+  $d.ShowNewFolderButton = $true
+  if ($d.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }
+}
+$form.Close()
+`;
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
+    try {
+        return await runPickerWith('powershell.exe', ['-NoProfile', '-Sta', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded]);
+    } catch (err) {
+        return await runPickerWith('pwsh.exe', ['-NoProfile', '-Sta', '-EncodedCommand', encoded]);
+    }
 }
 
 function openBrowser(url) {
@@ -51,17 +86,9 @@ function openBrowser(url) {
     child.unref();
 }
 
-function addFlag(args, flag, value) {
-    if (value !== undefined && value !== null && value !== '') args.push(flag, String(value));
-}
-
-function addBool(args, flag, value) {
-    if (value === true || value === 'true' || value === 'on') args.push(flag);
-}
-
-function selectedGameName(p) {
-    return gameProfiles.getProfile(p && p.gameName ? p.gameName : 'choops2k8').id;
-}
+function addFlag(args, flag, value) { if (value !== undefined && value !== null && value !== '') args.push(flag, String(value)); }
+function addBool(args, flag, value) { if (value === true || value === 'true' || value === 'on') args.push(flag); }
+function selectedGameName(p) { return gameProfiles.getProfile(p && p.gameName ? p.gameName : 'choops2k8').id; }
 
 function argsFor(action, p) {
     const args = [];
@@ -78,44 +105,14 @@ function argsFor(action, p) {
         return args;
     }
     if (action === 'build') return ['build', p.gameDir, p.modDir];
-    if (action === 'build-cache') {
-        args.push('build-cache', p.gameDir);
-        addFlag(args, '--game-name', selectedGameName(p));
-        return args;
-    }
+    if (action === 'build-cache') { args.push('build-cache', p.gameDir); addFlag(args, '--game-name', selectedGameName(p)); return args; }
     if (action === 'roster-decode') return ['roster-decode', p.inputFile, p.outputDir];
     if (action === 'roster-compare') return ['roster-compare', p.baseRoster, p.customRoster, p.outputDir];
-    if (action === 'inspect-iff') {
-        args.push('inspect-iff', p.inputFile, p.outputDir);
-        addBool(args, '--dump-subfiles', p.dumpSubfiles);
-        return args;
-    }
-    if (action === 'smart-scan') {
-        args.push('smart-scan', p.inputPath, p.outputDir);
-        addFlag(args, '--max-depth', p.maxDepth || '4');
-        addBool(args, '--dump-candidates', p.dumpCandidates);
-        return args;
-    }
-    if (action === 'scan-refs') {
-        args.push('scan-refs', p.inputPath, p.outputDir);
-        addFlag(args, '--min-length', p.minLength || '4');
-        addBool(args, '--only-matches', p.onlyMatches);
-        return args;
-    }
-    if (action === 'extract-cdf-textures') {
-        args.push('extract-cdf-textures', p.cdfFile, p.outputDir);
-        addFlag(args, '--iff', p.iffFile);
-        addBool(args, '--dds', p.dds !== false);
-        addBool(args, '--verbose', p.verbose);
-        return args;
-    }
-    if (action === 'export-scne-obj') {
-        args.push('export-scne-obj', p.scneFile, p.outputDir);
-        addBool(args, '--split-parts', p.splitParts);
-        addBool(args, '--flip-v', p.flipV);
-        addFlag(args, '--primitive-mode', p.primitiveMode || 'strip');
-        return args;
-    }
+    if (action === 'inspect-iff') { args.push('inspect-iff', p.inputFile, p.outputDir); addBool(args, '--dump-subfiles', p.dumpSubfiles); return args; }
+    if (action === 'smart-scan') { args.push('smart-scan', p.inputPath, p.outputDir); addFlag(args, '--max-depth', p.maxDepth || '4'); addBool(args, '--dump-candidates', p.dumpCandidates); return args; }
+    if (action === 'scan-refs') { args.push('scan-refs', p.inputPath, p.outputDir); addFlag(args, '--min-length', p.minLength || '4'); addBool(args, '--only-matches', p.onlyMatches); return args; }
+    if (action === 'extract-cdf-textures') { args.push('extract-cdf-textures', p.cdfFile, p.outputDir); addFlag(args, '--iff', p.iffFile); addBool(args, '--dds', p.dds !== false); addBool(args, '--verbose', p.verbose); return args; }
+    if (action === 'export-scne-obj') { args.push('export-scne-obj', p.scneFile, p.outputDir); addBool(args, '--split-parts', p.splitParts); addBool(args, '--flip-v', p.flipV); addFlag(args, '--primitive-mode', p.primitiveMode || 'strip'); return args; }
     throw new Error(`Unknown action: ${action}`);
 }
 
@@ -146,16 +143,16 @@ class Jobs {
 }
 
 function getGuiGameOptions() {
-    return gameProfiles.getSupportedGameProfiles().map((profile) => ({ value: profile.id, label: `${profile.displayName} (${profile.id})` }));
+    return gameProfiles.getSupportedGameProfiles().map(profile => ({ value: profile.id, label: `${profile.displayName} (${profile.id})` }));
 }
 
 function html() {
     const gameOptions = JSON.stringify(getGuiGameOptions());
     return `<!doctype html><html><head><meta charset="utf-8"><title>CHoops Modding Suite</title><style>
-:root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--panel2:#111827;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#238636;--purple:#8957e5;--blue:#1f6feb;--gold:#a37100}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}header{padding:22px 24px;border-bottom:1px solid var(--line);background:linear-gradient(135deg,#111827,#0d1117)}h1{margin:0;font-size:26px}h2{margin:0 0 8px;font-size:18px}h3{margin:16px 0 10px;font-size:16px}.muted,p,label{color:var(--muted);font-size:13px}.quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;padding:16px 18px;border-bottom:1px solid var(--line);background:var(--panel2)}.biglink{display:block;text-decoration:none;color:white;border-radius:16px;padding:18px;border:1px solid var(--line);background:#161b22}.biglink.primary{background:linear-gradient(135deg,#8957e5,#1f6feb)}.biglink strong{display:block;font-size:19px;margin-bottom:6px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 430px;gap:16px;padding:16px}.section{margin-bottom:18px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}.card,.log,details{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}.card.recommended{border-color:#3fb950}.card.advanced{border-style:dashed}summary{cursor:pointer;font-weight:800;font-size:17px}.row{display:flex;gap:8px}.row input{flex:1}input,select{width:100%;background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:9px}label{display:block;margin-top:9px}button{border:0;border-radius:10px;padding:9px 12px;color:white;background:var(--green);font-weight:800;cursor:pointer}.browse,.secondary{background:#30363d}.run{width:100%;margin-top:12px}.checks{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}.checks label{color:var(--text);margin:0}.checks input{width:auto}.log{position:sticky;top:16px;height:calc(100vh - 32px);overflow:auto}pre{white-space:pre-wrap;font-size:12px}.note{border-left:4px solid var(--blue);padding:8px 10px;background:#0d1117;border-radius:8px;margin:8px 0}@media(max-width:1050px){.layout{grid-template-columns:1fr}.log{position:static;height:auto}}
+:root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--panel2:#111827;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#238636;--purple:#8957e5;--blue:#1f6feb;--gold:#a37100}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}header{padding:22px 24px;border-bottom:1px solid var(--line);background:linear-gradient(135deg,#111827,#0d1117)}h1{margin:0;font-size:26px}h2{margin:0 0 8px;font-size:18px}.muted,p,label{color:var(--muted);font-size:13px}.quick{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;padding:16px 18px;border-bottom:1px solid var(--line);background:var(--panel2)}.biglink{display:block;text-decoration:none;color:white;border-radius:16px;padding:18px;border:1px solid var(--line);background:#161b22}.biglink.primary{background:linear-gradient(135deg,#8957e5,#1f6feb)}.biglink strong{display:block;font-size:19px;margin-bottom:6px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 430px;gap:16px;padding:16px}.section{margin-bottom:18px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}.card,.log,details{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}.card.recommended{border-color:#3fb950}summary{cursor:pointer;font-weight:800;font-size:17px}.row{display:flex;gap:8px}.row input{flex:1}input,select{width:100%;background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:9px}label{display:block;margin-top:9px}button{border:0;border-radius:10px;padding:9px 12px;color:white;background:var(--green);font-weight:800;cursor:pointer}.browse,.secondary{background:#30363d}.run{width:100%;margin-top:12px}.checks{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}.checks label{color:var(--text);margin:0}.checks input{width:auto}.log{position:sticky;top:16px;height:calc(100vh - 32px);overflow:auto}pre{white-space:pre-wrap;font-size:12px}.note{border-left:4px solid var(--blue);padding:8px 10px;background:#0d1117;border-radius:8px;margin:8px 0}@media(max-width:1050px){.layout{grid-template-columns:1fr}.log{position:static;height:auto}}
 </style></head><body><header><h1>College Hoops 2K8 Modding Suite</h1><p>Clean game-aware workflows for ripping, rebuilding, roster editing, and advanced research.</p></header>
-<section class="quick"><a class="biglink primary" href="/roster-studio" target="_blank"><strong>Open Roster Editor</strong><span>School data, colors, rivals, roster slots, rotation slots, assets, and research fields.</span></a><a class="biglink" href="#rip"><strong>Game-Aware Rip</strong><span>Use the selected game profile and dynamic cache support instead of hardcoded archive assumptions.</span></a><a class="biglink" href="#advanced"><strong>Advanced Research</strong><span>IFF/SCNE/CDF tools are tucked away so the main GUI stays usable.</span></a></section>
-<main class="layout"><div><section class="section" id="core"><h2>Main workflows</h2><div class="cards" id="coreCards"></div></section><section class="section"><h2>Roster utilities</h2><div class="cards" id="rosterCards"></div></section><details id="advanced"><summary>Advanced / research tools</summary><p class="muted">These are still available, but they are no longer mixed into the normal workflow. Use them when researching IFF, CDF, SCNE, or reference data.</p><div class="cards" id="advancedCards"></div></details></div><aside class="log"><h2>Jobs</h2><p class="muted">Running commands and logs appear here.</p><div id="jobs"></div></aside></main><script>
+<section class="quick"><a class="biglink primary" href="/roster-studio" target="_blank"><strong>Open Roster Editor</strong><span>School data, colors, rivals, roster slots, rotation slots, assets, and research fields.</span></a><a class="biglink" href="#rip"><strong>Game-Aware Rip</strong><span>Use the selected game profile and dynamic cache support.</span></a><a class="biglink" href="#advanced"><strong>Advanced Research</strong><span>IFF/SCNE/CDF tools are tucked away so the main GUI stays usable.</span></a></section>
+<main class="layout"><div><section class="section" id="core"><h2>Main workflows</h2><div class="cards" id="coreCards"></div></section><section class="section"><h2>Roster utilities</h2><div class="cards" id="rosterCards"></div></section><details id="advanced"><summary>Advanced / research tools</summary><p class="muted">These are still available, but they are no longer mixed into the normal workflow.</p><div class="cards" id="advancedCards"></div></details></div><aside class="log"><h2>Jobs</h2><p class="muted">Running commands and logs appear here.</p><div id="jobs"></div></aside></main><script>
 const gameOptions=${gameOptions};
 const groups={
 core:[
@@ -176,13 +173,13 @@ advanced:[
 ['rip','Single archive/file rip','Advanced targeted rip. Use only when you know the archive index or exact file name.',[['gameName','Game profile','game'],['gameDir','Game USRDIR folder','folder'],['outputDir','Output folder','folder'],['fileName','Optional single file',''],['index','Optional archive index','']],[['iffOnly','IFF only',false],['rawIff','Raw IFF',false],['rawType','Raw type',false],['showConsole','Show console',false]]]
 ]};
 function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function field(f){let [n,l,t]=f;if(t==='game')return '<label>'+esc(l)+'<select name="'+esc(n)+'">'+gameOptions.map(o=>'<option value="'+esc(o.value)+'">'+esc(o.label)+'</option>').join('')+'</select></label>';if((t||'').startsWith('select:'))return '<label>'+esc(l)+'<select name="'+esc(n)+'">'+t.slice(7).split(',').map(o=>'<option>'+esc(o)+'</option>').join('')+'</select></label>';let b=(t==='file'||t==='folder')?'<button class="browse" type="button" data-kind="'+t+'">Browse</button>':'';return '<label>'+esc(l)+'<div class="row"><input name="'+esc(n)+'">'+b+'</div></label>';}
+function field(f){let [n,l,t]=f;if(t==='game')return '<label>'+esc(l)+'<select name="'+esc(n)+'">'+gameOptions.map(o=>'<option value="'+esc(o.value)+'">'+esc(o.label)+'</option>').join('')+'</select></label>';if((t||'').startsWith('select:'))return '<label>'+esc(l)+'<select name="'+esc(n)+'">'+t.slice(7).split(',').map(o=>'<option>'+esc(o)+'</option>').join('')+'</select></label>';let b=(t==='file'||t==='folder')?'<button class="browse" type="button" data-kind="'+t+'">Browse</button>':'';return '<label>'+esc(l)+'<div class="row"><input name="'+esc(n)+'"><button class="secondary" type="button" data-paste="'+esc(n)+'">Paste</button>'+b+'</div></label>';}
 function checks(items){return '<div class="checks">'+items.map(c=>{let name=Array.isArray(c)?c[0]:c;let label=Array.isArray(c)?c[1]:c;let checked=Array.isArray(c)&&c[2]?' checked':'';return '<label><input type="checkbox" name="'+esc(name)+'"'+checked+'> '+esc(label)+'</label>';}).join('')+'</div>';}
 function card(x){let [a,t,d,fs,cs]=x;let cls=a==='rip'&&t.includes('Dynamic')?' card recommended':' card';return '<section class="'+cls+'"><h2>'+esc(t)+'</h2><p>'+esc(d)+'</p><form data-action="'+esc(a)+'">'+fs.map(field).join('')+checks(cs||[])+'<button class="run">Run</button></form></section>';}
 function draw(){document.getElementById('coreCards').innerHTML=groups.core.map(card).join('');document.getElementById('rosterCards').innerHTML=groups.roster.map(card).join('');document.getElementById('advancedCards').innerHTML=groups.advanced.map(card).join('');}
 draw();
 async function post(u,d){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});if(!r.ok)throw new Error(await r.text());return r.json();}
-document.addEventListener('click',async e=>{if(!e.target.classList.contains('browse'))return;try{let r=await post('/api/browse',{kind:e.target.dataset.kind});if(r.path)e.target.closest('label').querySelector('input').value=r.path;}catch(err){alert(err.message||err);}});
+document.addEventListener('click',async e=>{if(e.target.dataset.paste){let v=prompt('Paste full path:');if(v!==null)e.target.closest('.row').querySelector('input').value=v;return;}if(!e.target.classList.contains('browse'))return;e.target.textContent='Opening...';e.target.disabled=true;try{let r=await post('/api/browse',{kind:e.target.dataset.kind});if(r.path)e.target.closest('label').querySelector('input').value=r.path;}catch(err){alert((err.message||err)+'\n\nYou can also use Paste and enter the full path manually.');}finally{e.target.textContent='Browse';e.target.disabled=false;}});
 document.addEventListener('submit',async e=>{e.preventDefault();let f=e.target;let p={};f.querySelectorAll('input,select').forEach(i=>p[i.name]=i.type==='checkbox'?i.checked:i.value);try{await post('/api/run',{action:f.dataset.action,params:p});refresh();}catch(err){alert(err.message||err);}});
 async function refresh(){let r=await fetch('/api/jobs');let d=await r.json();document.getElementById('jobs').innerHTML=d.jobs.slice().reverse().map(j=>'<div><b>#'+j.id+' '+esc(j.action)+' - '+esc(j.status)+'</b><pre>'+esc(j.log)+'</pre></div>').join('');}
 setInterval(refresh,1200);refresh();
@@ -191,17 +188,17 @@ setInterval(refresh,1200);refresh();
 
 function rosterStudioHtml() {
     return `<!doctype html><html><head><meta charset="utf-8"><title>CH2K8 Roster Studio</title><style>
-:root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#238636;--purple:#8957e5;--gold:#a37100}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}header{padding:18px 22px;border-bottom:1px solid var(--line);background:#111827}h1{margin:0;font-size:24px}.muted{color:var(--muted)}.bar{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}input,select{width:100%;background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:9px}input[type=color]{height:38px;padding:2px}button{border:0;border-radius:10px;padding:9px 12px;color:white;background:var(--green);font-weight:800;cursor:pointer}.browse,.tab{background:#30363d}.danger{background:var(--gold)}.content{padding:18px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}.row{display:flex;gap:8px}.row input{flex:1}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.tab.active{background:var(--purple)}table{border-collapse:collapse;width:100%;font-size:12px}td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left}.edit{border:1px solid var(--line);border-radius:12px;background:#0d1117;padding:10px}.swatch{display:inline-block;width:32px;height:20px;border:1px solid #555;vertical-align:middle;margin-right:6px}pre{white-space:pre-wrap;font-size:12px}@media(max-width:900px){.bar{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}
-</style></head><body><header><h1>CH2K8 Roster Studio</h1><div class="muted">Built-in Edit School schema. All writes save a copy; original files are never overwritten.</div></header><section class="bar"><div class="row"><input id="rosterPath" placeholder="Roster source: save ZIP, USERDATA, roster_english.iff, or raw ROST"><button class="browse" data-target="rosterPath" data-kind="file">Browse</button></div><div class="row"><input id="assetRoot" placeholder="Optional ripped asset folder for uh/ua/ux/s/m lookup"><button class="browse" data-target="assetRoot" data-kind="folder">Browse</button></div><button id="openBtn">Open Roster</button></section><main class="content" id="content"><section class="panel"><h2>Open a roster source</h2><p class="muted">Open a PS3 save ZIP, USERDATA, roster_english.iff, or raw ROST. Then select a team, queue edits, and save a new copy for testing.</p></section></main><script>
+:root{color-scheme:dark;--bg:#0d1117;--panel:#161b22;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--green:#238636;--purple:#8957e5;--gold:#a37100}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}header{padding:18px 22px;border-bottom:1px solid var(--line);background:#111827}h1{margin:0;font-size:24px}.muted{color:var(--muted)}.bar{display:grid;grid-template-columns:1fr 1fr auto;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}input,select{width:100%;background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:9px}input[type=color]{height:38px;padding:2px}button{border:0;border-radius:10px;padding:9px 12px;color:white;background:var(--green);font-weight:800;cursor:pointer}.browse,.tab,.secondary{background:#30363d}.danger{background:var(--gold)}.content{padding:18px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}.row{display:flex;gap:8px}.row input{flex:1}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.tab.active{background:var(--purple)}table{border-collapse:collapse;width:100%;font-size:12px}td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left}.edit{border:1px solid var(--line);border-radius:12px;background:#0d1117;padding:10px}.swatch{display:inline-block;width:32px;height:20px;border:1px solid #555;vertical-align:middle;margin-right:6px}pre{white-space:pre-wrap;font-size:12px}@media(max-width:900px){.bar{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}
+</style></head><body><header><h1>CH2K8 Roster Studio</h1><div class="muted">Built-in Edit School schema. All writes save a copy; original files are never overwritten.</div></header><section class="bar"><div class="row"><input id="rosterPath" placeholder="Roster source: save ZIP, USERDATA, roster_english.iff, or raw ROST"><button class="secondary" data-paste="rosterPath">Paste</button><button class="browse" data-target="rosterPath" data-kind="file">Browse</button></div><div class="row"><input id="assetRoot" placeholder="Optional ripped asset folder for uh/ua/ux/s/m lookup"><button class="secondary" data-paste="assetRoot">Paste</button><button class="browse" data-target="assetRoot" data-kind="folder">Browse</button></div><button id="openBtn">Open Roster</button></section><main class="content" id="content"><section class="panel"><h2>Open a roster source</h2><p class="muted">Open a PS3 save ZIP, USERDATA, roster_english.iff, or raw ROST. If Browse is blocked by Windows, use Paste and enter the full path.</p></section></main><script>
 let state=null, selectedTeam=0, activeTab='Dashboard', edits=[];
 const tabNames=['Dashboard','School','Spirit','Colors / Floor / Basket / Cheer','Roster Slots','Depth Chart / Rotation','Assets','Conferences','Unknown / Research'];
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 async function post(u,d){let r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});if(!r.ok)throw new Error(await r.text());return r.json();}
-document.addEventListener('click',async e=>{if(!e.target.classList.contains('browse'))return;try{let r=await post('/api/browse',{kind:e.target.dataset.kind});if(r.path)document.getElementById(e.target.dataset.target).value=r.path;}catch(err){alert(err.message||err);}});
+document.addEventListener('click',async e=>{if(e.target.dataset.paste){let v=prompt('Paste full path:');if(v!==null)document.getElementById(e.target.dataset.paste).value=v;return;}if(!e.target.classList.contains('browse'))return;e.target.textContent='Opening...';e.target.disabled=true;try{let r=await post('/api/browse',{kind:e.target.dataset.kind});if(r.path)document.getElementById(e.target.dataset.target).value=r.path;}catch(err){alert((err.message||err)+'\n\nYou can also use Paste and enter the full path manually.');}finally{e.target.textContent='Browse';e.target.disabled=false;}});
 document.getElementById('openBtn').onclick=async()=>{try{state=await post('/api/roster/open',{rosterPath:document.getElementById('rosterPath').value,assetRoot:document.getElementById('assetRoot').value});selectedTeam=(state.teams.find(t=>String(t.school||t.short_name||'').toLowerCase().includes('georgia'))||state.teams[0]).team_index;edits=[];activeTab='Dashboard';render();}catch(err){alert(err.message||err);}};
 function team(){return state.teams.find(t=>Number(t.team_index)===Number(selectedTeam))||state.teams[0];}
 function addEdit(edit){edits.push({...edit,teamIndex:Number(selectedTeam)});render();}
-function top(){let opts=state.teams.map(t=>'<option value="'+t.team_index+'" '+(Number(t.team_index)===Number(selectedTeam)?'selected':'')+'>'+esc(t.team_index+' - '+(t.school||t.short_name||t.abbreviation||'Team'))+'</option>').join('');let tabs=tabNames.map(t=>'<button class="tab '+(activeTab===t?'active':'')+'" data-tab="'+esc(t)+'">'+esc(t)+'</button>').join('');return '<section class="panel"><div class="grid"><label>Team<select id="teamSelect">'+opts+'</select></label><label>Save output copy path<input id="outputPath" placeholder="Example: C:\\CH2K8\\USERDATA_modded"></label><div><button class="danger" id="saveBtn">Save Copy With Queued Edits</button><p class="muted">Queued edits: '+edits.length+'</p></div></div><div class="tabs">'+tabs+'</div></section>';}
+function top(){let opts=state.teams.map(t=>'<option value="'+t.team_index+'" '+(Number(t.team_index)===Number(selectedTeam)?'selected':'')+'>'+esc(t.team_index+' - '+(t.school||t.short_name||t.abbreviation||'Team'))+'</option>').join('');let tabs=tabNames.map(t=>'<button class="tab '+(activeTab===t?'active':'')+'" data-tab="'+esc(t)+'">'+esc(t)+'</button>').join('');return '<section class="panel"><div class="grid"><label>Team<select id="teamSelect">'+opts+'</select></label><label>Save output copy path<div class="row"><input id="outputPath" placeholder="Example: C:\\CH2K8\\USERDATA_modded"><button class="secondary" data-paste="outputPath">Paste</button></div></label><div><button class="danger" id="saveBtn">Save Copy With Queued Edits</button><p class="muted">Queued edits: '+edits.length+'</p></div></div><div class="tabs">'+tabs+'</div></section>';}
 function strBox(key,label,value,max){return '<div class="edit"><label>'+esc(label)+'<input id="str_'+key+'" maxlength="'+(max||32)+'" value="'+esc(value||'')+'"></label><button data-string="'+esc(key)+'">Queue</button></div>';}
 function school(){let t=team();return '<section class="panel"><h2>School</h2><div class="grid">'+strBox('schoolNameShort','School Name short',t.short_name,16)+strBox('schoolNameFull','School Name full',t.school,16)+strBox('nickname','Nickname',t.mascot_plural||t.nickname,16)+strBox('abbreviation','Abbreviation',t.abbreviation,8)+strBox('mascotNameText','Mascot text',t.mascot_name,16)+'</div><p class="muted">City, State, Logo Design, and Fight Song are visible in-game but not safely mapped yet.</p></section>';}
 function spirit(){let r=team().research||{};let rivalHtml=[1,2,3,4,5].map(i=>'<div class="edit"><label>Rival #'+i+'<select id="riv_'+i+'">'+state.teams.map(t=>'<option value="'+t.team_index+'" '+(r.rivals&&r.rivals[i-1]&&Number(r.rivals[i-1].teamIndex)===Number(t.team_index)?'selected':'')+'>'+esc(t.team_index+' - '+(t.school||t.short_name||t.abbreviation))+'</option>').join('')+'</select></label><button data-rival="'+i+'">Queue Rival</button></div>').join('');return '<section class="panel"><h2>Spirit</h2><p class="muted">Mascot model is a strong asset-word candidate at team +0x190; use Unknown/Research for experimental edits.</p><div class="grid">'+strBox('studentSection','Student Section',team().student_section,24)+strBox('midnightMadness','Mid. Madness',team().event_name,24)+'</div><h3>Rivals</h3><div class="grid">'+rivalHtml+'</div></section>';}
