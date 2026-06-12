@@ -2,6 +2,7 @@ const http = require('http');
 const { spawn } = require('child_process');
 
 const rosterStudio = require('./rosterStudioBackend');
+const rosterExporter = require('./rosterStudioExporter');
 const { rosterStudioHtml } = require('./rosterStudioPage');
 
 function sendJson(res, code, value) {
@@ -43,6 +44,9 @@ async function startRosterStudioServer(options = {}) {
       } else if (req.method === 'POST' && url.pathname === '/api/roster/open') {
         const body = await readBody(req);
         sendJson(res, 200, await rosterStudio.openRosterStudio(body.rosterPath, body.assetRoot));
+      } else if (req.method === 'POST' && url.pathname === '/api/roster/export') {
+        const body = await readBody(req);
+        sendJson(res, 200, await rosterExporter.exportRosterCopy(body.rosterPath, body.outputPath, body.outputMode, body.edits || []));
       } else if (req.method === 'POST' && url.pathname === '/api/browse') {
         sendJson(res, 501, { error: 'Browse dialogs are available in the main GUI. Paste paths in this standalone Roster Studio page.' });
       } else {
