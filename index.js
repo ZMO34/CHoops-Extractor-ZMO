@@ -6,6 +6,7 @@ const ripper = require('./src/ripperV3');
 const importer = require('./src/importerV2');
 const reverter = require('./src/reverter');
 const builder = require('./src/builder');
+const buildCopy = require('./src/buildCopy');
 const assetExtractor = require('./src/assetExtractor');
 const cdfDecompressor = require('./src/cdfDecompressor');
 const cdfTextureExtractor = require('./src/cdfTextureExtractor');
@@ -24,8 +25,8 @@ const gameOptionHelp = `Specify which game archive profile to use. Supported val
 
 program
     .name('choops-extractor')
-    .version('0.6.2')
-    .description('A command line utility to extract and research PS3 2K Sports IFF/CDF archives.');
+    .version('0.7.0')
+    .description('A command line utility to extract, copy-build, and research PS3 2K Sports IFF/CDF archives.');
 
 program.command('profiles')
     .description('List supported game archive profiles.')
@@ -311,7 +312,7 @@ program.command('import')
     });
 
 program.command('revert')
-    .description('Revert a file (warning: cannot be undone!)')
+    .description('Revert a file in a working copy. Prefer build-copy so the vanilla source never needs reverting.')
     .argument('<path to game files>', 'Path to game files directory, usually PS3_GAME/USRDIR')
     .argument('<iff file name>', 'Name of the IFF file to revert')
     .action(async (pathToGameFiles, iffFileName, options) => {
@@ -319,18 +320,31 @@ program.command('revert')
     });
 
 program.command('revert-all')
-    .description('Revert the entire game archive (warning: cannot be undone!)')
+    .description('Revert the entire working-copy archive. Prefer build-copy so the vanilla source never needs reverting.')
     .argument('<path to game files>', 'Path to game files directory, usually PS3_GAME/USRDIR')
     .action(async (pathToGameFiles, options) => {
         await reverter.revertAll(pathToGameFiles, options);
     });
 
 program.command('build')
-    .description('Build mods and alter the game files (do not do this while the game is active)')
-    .argument('<path to game files>', 'Path to the game files to modify')
+    .description('Advanced: build mods directly into the selected game folder. Prefer build-copy for safe vanilla preservation.')
+    .argument('<path to game files>', 'Path to the game files to modify, usually PS3_GAME/USRDIR')
     .argument('<path to mod files>', 'Path to the mod')
-    .action(async (pathToGameFiles, pathToMod) => {
-        await builder(pathToGameFiles, pathToMod);
+    .option('--game-name <gameName>', gameOptionHelp, 'choops2k8')
+    .action(async (pathToGameFiles, pathToMod, options) => {
+        await builder(pathToGameFiles, pathToMod, options);
+    });
+
+program.command('build-copy')
+    .description('Safe default build: copy the vanilla extracted game folder, then apply the mod only to the copy.')
+    .argument('<path to vanilla game or USRDIR>', 'Vanilla extracted game folder, PS3_GAME folder, or PS3_GAME/USRDIR')
+    .argument('<path to mod files>', 'Path to the mod/rip folder')
+    .argument('<output copied game path>', 'New output folder that will receive the modded copy')
+    .option('--game-name <gameName>', gameOptionHelp, 'choops2k8')
+    .option('--overwrite', 'Delete the output copied game path first if it already exists')
+    .option('--copy-concurrency <number>', 'Number of concurrent file copies to run', '8')
+    .action(async (vanillaGamePath, pathToMod, outputCopiedGamePath, options) => {
+        await buildCopy(vanillaGamePath, pathToMod, outputCopiedGamePath, options);
     });
 
 (async () => {
