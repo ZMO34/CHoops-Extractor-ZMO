@@ -128,6 +128,7 @@ program.command('rip')
     .option('--raw-iff', 'Do not decompress the IFF. Rip it as-is.')
     .option('--log-output <string>', 'Path to place the output log. Defaults to base output directory')
     .option('--show-console', 'Show the output in the console in addition to creating a log')
+    .option('--progress', 'Emit machine-readable progress events for native desktop UI')
     .option('--type <types...>', 'Only output files of certain type(s). Accepts multiple inputs separated by a space. Supported types: UNKNOWN, TXTR, SCNE, AUDO, LAYT, MRKS, PRIV, TXT, DRCT, CLTH, AMBO, HILT, NAME, CDAN')
     .option('--raw-type', 'Output the subfile as it is in the IFF. Will not process the type.')
     .option('--game-name <gameName>', gameOptionHelp, 'choops2k8')
@@ -331,6 +332,7 @@ program.command('build')
     .argument('<path to game files>', 'Path to the game files to modify, usually PS3_GAME/USRDIR')
     .argument('<path to mod files>', 'Path to the mod')
     .option('--game-name <gameName>', gameOptionHelp, 'choops2k8')
+    .option('--progress', 'Emit machine-readable progress events for native desktop UI')
     .action(async (pathToGameFiles, pathToMod, options) => {
         await builder(pathToGameFiles, pathToMod, options);
     });
@@ -343,6 +345,7 @@ program.command('build-copy')
     .option('--game-name <gameName>', gameOptionHelp, 'choops2k8')
     .option('--overwrite', 'Delete the output copied game path first if it already exists')
     .option('--copy-concurrency <number>', 'Number of concurrent file copies to run', '8')
+    .option('--progress', 'Emit machine-readable progress events for native desktop UI')
     .action(async (vanillaGamePath, pathToMod, outputCopiedGamePath, options) => {
         await buildCopy(vanillaGamePath, pathToMod, outputCopiedGamePath, options);
     });
