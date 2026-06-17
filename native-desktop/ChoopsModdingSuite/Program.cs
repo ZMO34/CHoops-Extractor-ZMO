@@ -6,6 +6,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -23,7 +24,11 @@ internal static class Program
 
 internal sealed class MainForm : Form
 {
+    private const string ProgressPrefix = "__CHOOPS_PROGRESS__";
+
     private readonly RichTextBox _log = new() { Dock = DockStyle.Fill, ReadOnly = true, Font = new Font("Consolas", 9f), BackColor = Color.FromArgb(13, 17, 23), ForeColor = Color.FromArgb(230, 237, 243) };
+    private readonly ProgressBar _progressBar = new() { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100, Value = 0, Style = ProgressBarStyle.Continuous };
+    private readonly Label _progressLabel = new() { Dock = DockStyle.Fill, Text = "Ready", AutoEllipsis = true, ForeColor = Color.FromArgb(230, 237, 243), TextAlign = ContentAlignment.MiddleLeft };
     private readonly string _cliPath;
     private TextBox? _csvPath;
     private DataGridView? _csvGrid;
@@ -55,10 +60,19 @@ internal sealed class MainForm : Form
     private Control CreateLogPanel()
     {
         var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8), BackColor = Color.FromArgb(13, 17, 23) };
-        var clear = new Button { Text = "Clear Log", Dock = DockStyle.Top, Height = 34 };
+        var top = new TableLayoutPanel { Dock = DockStyle.Top, Height = 86, ColumnCount = 1, RowCount = 3, BackColor = Color.FromArgb(13, 17, 23) };
+        top.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        top.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        top.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+
+        var clear = new Button { Text = "Clear Log", Dock = DockStyle.Fill, Height = 34 };
         clear.Click += (_, _) => _log.Clear();
+        top.Controls.Add(clear, 0, 0);
+        top.Controls.Add(_progressLabel, 0, 1);
+        top.Controls.Add(_progressBar, 0, 2);
+
         panel.Controls.Add(_log);
-        panel.Controls.Add(clear);
+        panel.Controls.Add(top);
         return panel;
     }
 
@@ -147,8 +161,10 @@ internal sealed class MainForm : Form
             foreach (var item in textInputs) values[item.Key] = item.Value.Text.Trim();
             foreach (var item in comboInputs) values[item.Key] = Convert.ToString(item.Value.SelectedItem) ?? "";
             var switches = boolInputs.ToDictionary(kv => kv.Key, kv => kv.Value.Checked, StringComparer.OrdinalIgnoreCase);
+            run.Enabled = false;
             try { await RunCliAsync(spec.BuildArgs(values, switches)); }
             catch (Exception ex) { AppendLog("[ERROR] " + ex.Message); }
+            finally { run.Enabled = true; }
         };
         layout.Controls.Add(new Label(), 0, row);
         layout.Controls.Add(run, 1, row);
@@ -193,14 +209,14 @@ internal sealed class MainForm : Form
     {
         var page = new TabPage("About") { BackColor = Color.FromArgb(13, 17, 23) };
         var text = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = Color.FromArgb(13, 17, 23), ForeColor = Color.FromArgb(230, 237, 243), Font = new Font("Consolas", 10f) };
-        text.Text = "CHoops Native Modding Suite\r\n\r\nThis is the browser-free Windows desktop shell. It uses WinForms controls and spawns choops-extractor.exe for every backend job.\r\n\r\nSafe default workflow:\r\n1. Keep your vanilla extracted game folder untouched.\r\n2. Use Safe Build -> Build Copy.\r\n3. The tool copies the vanilla folder to a new output folder.\r\n4. Mods are applied only to the copied folder.\r\n\r\nDirect in-place build/revert are still available as advanced actions for debugging, but they are no longer the recommended normal workflow.";
+        text.Text = "CHoops Native Modding Suite\r\n\r\nThis is the browser-free Windows desktop shell. It uses WinForms controls and spawns choops-extractor.exe for every backend job.\r\n\r\nSafe default workflow:\r\n1. Keep your vanilla extracted game folder untouched.\r\n2. Use Safe Build -> Build Copy.\r\n3. The tool copies the vanilla folder to a new output folder.\r\n4. Mods are applied only to the copied folder.\r\n\r\nLong rip and build jobs report structured progress to the native progress bar.\r\n\r\nDirect in-place build/revert are still available as advanced actions for debugging, but they are no longer the recommended normal workflow.";
         page.Controls.Add(text);
         return page;
     }
 
     private static IEnumerable<CommandSpec> SafeBuildSpecs()
     {
-        yield return new CommandSpec("build-copy", "Build Copy (recommended)", "Copies your vanilla extracted game folder to a new output folder, then applies the mod only to that copy.",
+        yield return new CommandSpec("build-copy", "Build Copy (recommended)", "Copies your vanilla extracted game folder to a new output folder, then applies the mod only to that copy. Shows full copy/build progress.",
             new[] { Field.Game("gameName"), Field.Folder("vanillaGame", "Vanilla game folder / PS3_GAME / USRDIR"), Field.Folder("modDir", "Mod/rip folder"), Field.Folder("outputGame", "Output copied game folder"), Field.Text("copyConcurrency", "Copy concurrency", "8") },
             new[] { Switch.Option("overwrite", "Overwrite output folder") },
             (v, s) => Args("build-copy", v["vanillaGame"], v["modDir"], v["outputGame"], Opt("--game-name", v["gameName"]), Opt("--copy-concurrency", v["copyConcurrency"]), Flag("--overwrite", s["overwrite"])));
@@ -211,7 +227,7 @@ internal sealed class MainForm : Form
 
     private static IEnumerable<CommandSpec> RipSpecs()
     {
-        yield return new CommandSpec("rip", "Dynamic Full Rip", "Rips game/archive content using the selected game profile and dynamic cache support.",
+        yield return new CommandSpec("rip", "Dynamic Full Rip", "Rips game/archive content using the selected game profile and dynamic cache support. Shows full rip progress.",
             new[] { Field.Game("gameName"), Field.Folder("gameDir", "Game USRDIR folder"), Field.Folder("outputDir", "Output/rip folder"), Field.Text("fileName", "Optional single file"), Field.Text("index", "Optional archive index") },
             new[] { Switch.Option("buildCache", "Build/update archive cache", true), Switch.Option("showConsole", "Show extractor console"), Switch.Option("iffOnly", "IFF only"), Switch.Option("rawIff", "Raw IFF"), Switch.Option("rawType", "Raw type") },
             (v, s) => Args("rip", v["gameDir"], v["outputDir"], Opt("--game-name", v["gameName"]), Opt("--file", v["fileName"]), Opt("--index", v["index"]), Flag("--build-cache", s["buildCache"]), Flag("--show-console", s["showConsole"]), Flag("--iff-only", s["iffOnly"]), Flag("--raw-iff", s["rawIff"]), Flag("--raw-type", s["rawType"])));
@@ -240,20 +256,82 @@ internal sealed class MainForm : Form
         yield return new CommandSpec("probe", "Compression Probe", "Probe an IFF/CDF for alternate compression layouts and embedded streams.", new[] { Field.File("inputFile", "IFF/CDF file") }, Array.Empty<Switch>(), (v, _) => Args("probe", v["inputFile"]));
     }
 
-    private async Task RunCliAsync(IReadOnlyList<string> args)
+    private async Task RunCliAsync(IReadOnlyList<string> rawArgs)
     {
         if (!File.Exists(_cliPath)) { AppendLog($"[ERROR] CLI backend not found: {_cliPath}"); return; }
+        var args = AddProgressFlagForLongJobs(rawArgs);
+        ResetProgress($"Starting {args.FirstOrDefault() ?? "job"}...");
         AppendLog("> " + _cliPath + " " + string.Join(" ", args.Select(QuoteIfNeeded)));
         var startInfo = new ProcessStartInfo { FileName = _cliPath, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true, WorkingDirectory = AppContext.BaseDirectory };
         foreach (var arg in args) startInfo.ArgumentList.Add(arg);
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        process.OutputDataReceived += (_, e) => { if (e.Data != null) AppendLog(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data != null) AppendLog(e.Data); };
+        process.OutputDataReceived += (_, e) => { if (e.Data != null) HandleProcessLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { if (e.Data != null) HandleProcessLine(e.Data); };
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         await process.WaitForExitAsync();
+        if (process.ExitCode == 0) SetProgress("Complete", 100, false);
+        else SetProgress($"Exited with code {process.ExitCode}", null, false);
         AppendLog($"[DONE] Exit code {process.ExitCode}");
+    }
+
+    private void HandleProcessLine(string line)
+    {
+        if (TryHandleProgressLine(line)) return;
+        AppendLog(line);
+    }
+
+    private bool TryHandleProgressLine(string line)
+    {
+        if (!line.StartsWith(ProgressPrefix, StringComparison.Ordinal)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(line[ProgressPrefix.Length..]);
+            var root = doc.RootElement;
+            var phase = root.TryGetProperty("phase", out var phaseElement) ? phaseElement.GetString() : "Working";
+            var message = root.TryGetProperty("message", out var messageElement) ? messageElement.GetString() : phase;
+            var indeterminate = root.TryGetProperty("indeterminate", out var indeterminateElement) && indeterminateElement.GetBoolean();
+            double? percent = null;
+            if (!indeterminate && root.TryGetProperty("percent", out var percentElement) && percentElement.ValueKind == JsonValueKind.Number)
+            {
+                percent = percentElement.GetDouble();
+            }
+            SetProgress($"{phase}: {message}", percent, indeterminate);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppendLog("[WARN] Failed to parse progress event: " + ex.Message);
+            return true;
+        }
+    }
+
+    private void ResetProgress(string message) => SetProgress(message, 0, false);
+
+    private void SetProgress(string message, double? percent, bool indeterminate)
+    {
+        if (InvokeRequired) { BeginInvoke(new Action<string, double?, bool>(SetProgress), message, percent, indeterminate); return; }
+        _progressLabel.Text = message;
+        if (indeterminate || percent == null)
+        {
+            _progressBar.Style = ProgressBarStyle.Marquee;
+            return;
+        }
+        _progressBar.Style = ProgressBarStyle.Continuous;
+        var value = Math.Max(0, Math.Min(100, (int)Math.Round(percent.Value)));
+        _progressBar.Value = value;
+    }
+
+    private static List<string> AddProgressFlagForLongJobs(IReadOnlyList<string> args)
+    {
+        var result = args.ToList();
+        var command = result.FirstOrDefault() ?? string.Empty;
+        var longRunning = command.Equals("rip", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("build", StringComparison.OrdinalIgnoreCase)
+            || command.Equals("build-copy", StringComparison.OrdinalIgnoreCase);
+        if (longRunning && !result.Any(a => a.Equals("--progress", StringComparison.OrdinalIgnoreCase))) result.Add("--progress");
+        return result;
     }
 
     private void BrowseInto(TextBox? box, FieldKind kind)
