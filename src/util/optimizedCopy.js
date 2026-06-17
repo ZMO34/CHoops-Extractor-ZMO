@@ -97,6 +97,7 @@ async function copyTreeOptimized(sourceRoot, destinationRoot, options = {}) {
     const destination = path.resolve(destinationRoot);
     const concurrency = Math.max(1, Number(options.concurrency || 8));
     const logger = typeof options.logger === 'function' ? options.logger : () => {};
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
 
     assertDestinationIsSafe(source, destination);
 
@@ -109,12 +110,16 @@ async function copyTreeOptimized(sourceRoot, destinationRoot, options = {}) {
             throw new Error(`Output folder already exists: ${destination}. Choose an empty path or pass --overwrite.`);
         }
         logger(`[COPY] Removing existing output folder: ${destination}`);
+        onProgress({ phase: 'Copying vanilla game', current: 0, total: 1, message: 'Removing existing output folder...' });
         await fs.rm(destination, { recursive: true, force: true });
     }
 
     logger(`[COPY] Indexing source tree: ${source}`);
+    onProgress({ phase: 'Copying vanilla game', current: 0, total: 1, message: 'Indexing source tree...', indeterminate: true });
     const { files, directories, links } = await collectEntries(source);
     await fs.mkdir(destination, { recursive: true });
+
+    onProgress({ phase: 'Copying vanilla game', current: 0, total: Math.max(1, files.length), message: `Preparing ${files.length} files...` });
 
     for (const dir of directories) {
         const relative = path.relative(source, dir);
@@ -136,6 +141,16 @@ async function copyTreeOptimized(sourceRoot, destinationRoot, options = {}) {
         const relative = path.relative(source, file);
         copiedBytes += await copyFileFast(file, path.join(destination, relative));
         copiedFiles += 1;
+
+        if (copiedFiles % 10 === 0 || copiedFiles === files.length) {
+            onProgress({
+                phase: 'Copying vanilla game',
+                current: copiedFiles,
+                total: Math.max(1, files.length),
+                message: `Copied ${copiedFiles}/${files.length} files`
+            });
+        }
+
         if (copiedFiles % 100 === 0) {
             logger(`[COPY] Copied ${copiedFiles}/${files.length} files...`);
         }
@@ -143,6 +158,7 @@ async function copyTreeOptimized(sourceRoot, destinationRoot, options = {}) {
 
     const elapsedMs = Date.now() - startedAt;
     logger(`[COPY] Complete. files=${copiedFiles}, bytes=${copiedBytes}, elapsedMs=${elapsedMs}`);
+    onProgress({ phase: 'Copying vanilla game', current: copiedFiles, total: Math.max(1, files.length), message: 'Copy complete', force: true });
 
     return {
         source,
