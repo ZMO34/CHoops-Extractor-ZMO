@@ -2,7 +2,7 @@
 
 This project is a College Hoops 2K8 PS3-focused archive, roster, texture, CDF/IFF, SCNE, and rebuild research suite.
 
-The repo now builds two main Windows executables:
+The current release path builds a command-line backend and a **native Windows desktop app**. The desktop app is WinForms-based and does not use a browser, hosted browser tab, or Electron/WebView shell.
 
 ```bat
 npm install
@@ -12,13 +12,13 @@ npm run pack
 Outputs:
 
 ```text
-dist\choops-extractor.exe      command-line backend
-dist-desktop\choops-desktop.exe desktop app
+dist\choops-extractor.exe          command-line backend
+dist-native\choops-native-desktop.exe native desktop app
 ```
 
-The desktop app replaces the old packaged browser GUI. It opens a local application window, while tool jobs still route through the CLI backend so every workflow remains scriptable, logged, and debuggable.
+The native app keeps the heavy work in `choops-extractor.exe`, so every workflow remains scriptable, logged, and debuggable while the user-facing app stays local/native.
 
-### Desktop app
+### Native desktop app
 
 For development:
 
@@ -35,16 +35,17 @@ npm run pack
 Then run:
 
 ```bat
-dist-desktop\choops-desktop.exe
+dist-native\choops-native-desktop.exe
 ```
 
-The app includes:
+The native app includes:
 
+- safe Build Copy workflow
+- advanced in-place build for disposable copies
 - dynamic full rip
 - build-cache
-- build modded game
-- roster editor / Roster Studio
 - roster decode / compare
+- simple native CSV roster table editing
 - IFF inspection
 - smart scan
 - reference scan
@@ -55,6 +56,38 @@ The app includes:
 - SCNE OBJ export
 - floor.scne inspection
 - compression probing
+
+### Safe modded-copy workflow
+
+The recommended build path no longer modifies your vanilla extracted game folder.
+
+```bat
+dist\choops-extractor.exe build-copy <vanilla-game-or-USRDIR> <mod-folder> <output-modded-copy> --game-name choops2k8
+```
+
+Examples:
+
+```bat
+dist\choops-extractor.exe build-copy "D:\Games\CH2K8\PS3_GAME" "D:\Mods\MyRip" "D:\Games\CH2K8_MODDED\PS3_GAME" --game-name choops2k8
+```
+
+```bat
+dist\choops-extractor.exe build-copy "D:\Games\CH2K8\PS3_GAME\USRDIR" "D:\Mods\MyRip" "D:\Games\CH2K8_MODDED\USRDIR" --game-name choops2k8
+```
+
+`build-copy` copies the vanilla folder to a new output folder first, then applies the mod only to the copied game. It writes:
+
+```text
+choops_build_copy_manifest.json
+```
+
+inside the copied output folder.
+
+If the output folder already exists:
+
+```bat
+dist\choops-extractor.exe build-copy <vanilla> <mod> <output> --overwrite
+```
 
 ### CLI usage
 
@@ -88,6 +121,12 @@ Compare two roster sources:
 dist\choops-extractor.exe roster-compare <base-roster> <custom-roster> <output-folder>
 ```
 
+Advanced in-place build still exists, but use it only on a disposable copy:
+
+```bat
+dist\choops-extractor.exe build <path-to-copied-PS3_GAME\USRDIR> <mod-folder> --game-name choops2k8
+```
+
 ### Preservation rules
 
 - College Hoops 2K8 PS3 standard archive IFFs use magic `0xFF3BEF94`.
@@ -96,12 +135,8 @@ dist\choops-extractor.exe roster-compare <base-roster> <custom-roster> <output-f
 - Raw containers and unknown fields should be preserved before conversion/import attempts.
 - Rebuild changes should be tested with same-size or preservation-safe edits before broader size-changing work.
 
-### Legacy browser launcher
+### Requirements
 
-The old browser launcher is still available for debugging only:
-
-```bat
-npm run gui:browser
-```
-
-Release builds should use the desktop app instead.
+- Node.js/npm for CLI packaging.
+- .NET 8 SDK for building the native WinForms desktop app.
+- Windows x64 for the native desktop release target.
