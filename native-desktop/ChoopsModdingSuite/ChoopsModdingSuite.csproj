@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>choops-native-desktop</AssemblyName>
+    <RootNamespace>ChoopsModdingSuite</RootNamespace>
+    <ApplicationIcon />
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\dist\choops-extractor.exe" Link="choops-extractor.exe" Condition="Exists('..\..\dist\choops-extractor.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Include="..\..\2k-tools\lib\gtf2dds.exe" Link="2k-tools\lib\gtf2dds.exe" Condition="Exists('..\..\2k-tools\lib\gtf2dds.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Include="..\..\2k-tools\lib\dds2gtf.exe" Link="2k-tools\lib\dds2gtf.exe" Condition="Exists('..\..\2k-tools\lib\dds2gtf.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+</Project>
