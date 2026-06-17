@@ -15,6 +15,7 @@ const splitPartExporter = require('./src/scneSplitPartExporter');
 const smartAssetScanner = require('./src/smartAssetScanner');
 const iffResearchTools = require('./src/iffResearchTools');
 const scneFloorInspector = require('./src/scneFloorInspector');
+const rosterTool = require('./src/rosterTool');
 const probeUtil = require('./2k-tools/src/util/iffCompressionProbe');
 const gameProfiles = require('./2k-tools/src/util/gameProfiles');
 
@@ -23,8 +24,23 @@ const gameOptionHelp = `Specify which game archive profile to use. Supported val
 
 program
     .name('choops-extractor')
-    .version('0.5.9')
+    .version('0.6.2')
     .description('A command line utility to extract and research PS3 2K Sports IFF/CDF archives.');
+
+program.command('profiles')
+    .description('List supported game archive profiles.')
+    .option('--json', 'Print machine-readable JSON')
+    .action((options) => {
+        const profiles = gameProfiles.getSupportedGameProfiles();
+        if (options.json) {
+            console.log(JSON.stringify(profiles, null, 2));
+            return;
+        }
+        console.log('Supported game profiles:');
+        profiles.forEach((profile) => {
+            console.log(`- ${profile.id}: ${profile.displayName} | cache=${profile.cacheName} | aliases=${(profile.aliases || []).join(', ') || 'none'}`);
+        });
+    });
 
 program.command('smart-scan')
     .description('Recursively scan IFF/CDF/BIN containers and generate evidence-based structural manifests.')
@@ -253,6 +269,27 @@ program.command('probe')
         results.forEach((result, index) => {
             console.log(`[${index}] algorithm=${result.algorithm} label=${result.label} offset=0x${result.absoluteOffset.toString(16)} size=0x${result.data.length.toString(16)}`);
         });
+    });
+
+program.command('roster-decode')
+    .description('Decode a roster source to CSV/JSON tables. Accepts roster_english.iff, raw USERDATA, decrypted save ZIP, or raw ROST.')
+    .argument('<input roster>', 'Roster source to decode')
+    .argument('<output path>', 'Output folder for players/teams/slots/arena/coach CSV files')
+    .action(async (inputRoster, outputPath) => {
+        const summary = await rosterTool.decodeRoster(inputRoster, outputPath);
+        console.log('[ROSTER] Decode complete.');
+        console.log(JSON.stringify(summary, null, 2));
+    });
+
+program.command('roster-compare')
+    .description('Compare two roster sources after normalizing them to ROST payloads.')
+    .argument('<base roster>', 'Base roster source')
+    .argument('<custom roster>', 'Custom roster source')
+    .argument('<output path>', 'Output folder for roster diff CSV/JSON files')
+    .action(async (baseRoster, customRoster, outputPath) => {
+        const summary = await rosterTool.compareRosters(baseRoster, customRoster, outputPath);
+        console.log('[ROSTER] Compare complete.');
+        console.log(JSON.stringify(summary, null, 2));
     });
 
 program.command('build-cache')
