@@ -9,6 +9,7 @@ choops-native-desktop.exe
   -> native WinForms controls
   -> directly spawns choops-extractor.exe
   -> streams stdout/stderr into the native job log
+  -> parses structured progress events for long rip/build jobs
 ```
 
 The CLI remains the source of truth for extraction, roster, CDF, SCNE, and rebuild commands. The native app is a local desktop shell around those commands.
@@ -62,6 +63,67 @@ The native UI includes:
 - SCNE OBJ export
 - floor.scne inspection
 - compression probe
+
+## Progress bar support
+
+The native desktop app now shows one shared visual progress bar above the job log.
+
+Long-running commands are automatically launched with:
+
+```text
+--progress
+```
+
+for:
+
+```text
+rip
+build
+build-copy
+```
+
+When `--progress` is enabled, the CLI emits hidden machine-readable lines prefixed with:
+
+```text
+__CHOOPS_PROGRESS__
+```
+
+The native app parses those lines and updates:
+
+- progress percentage
+- current phase
+- current status message
+- indeterminate/marquee state for work where exact totals are not known yet
+
+Normal CLI logs are still shown in the job log. The progress event lines are consumed by the native UI instead of being displayed as noisy log text.
+
+Current progress coverage:
+
+```text
+rip:
+  preparing output/logs
+  loading hash resolver
+  reading archive table
+  ripping containers
+  enhanced standard-IFF preservation pass
+  enhanced CDF-backed extraction pass
+  NAME/AUDO metadata pass
+
+build-copy:
+  preparing safe output
+  indexing/copying vanilla JB folder
+  locating copied USRDIR
+  applying mod overrides
+  repacking archives
+  writing manifest
+
+build:
+  preparing controller
+  reading archive table
+  scanning mod folder
+  applying overrides
+  repacking archives
+```
 
 ## Backend routing
 
