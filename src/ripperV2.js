@@ -12,6 +12,7 @@ const ChoopsTextureReader = require('../2k-tools/src/parser/choops/ChoopsTexture
 const ripCdfBackedPairInline = require('./ripCdfBackedPairInline');
 
 const hashUtil = require('../2k-tools/src/util/2kHashUtil');
+const { createProgressReporter, mapProgress } = require('./util/progress');
 
 function cleanName(value) {
     return String(value || 'unnamed').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
@@ -99,9 +100,16 @@ async function writeRebuiltIff(iff, outputFilePath) {
 }
 
 module.exports = async (inputPath, outputPath, options) => {
+    const progress = createProgressReporter(options);
+    const basePercent = Number.isFinite(Number(options.progressBase)) ? Number(options.progressBase) : 0;
+    const spanPercent = Number.isFinite(Number(options.progressSpan)) ? Number(options.progressSpan) : 100;
+    const at = (localPercent) => Math.max(0, Math.min(100, basePercent + ((localPercent / 100) * spanPercent)));
+
     const defaultLogPath = path.join(outputPath, '_logs', `choops-extractor-output_${Date.now().toString()}.txt`);
     let logOutput = options.logOutput ? options.logOutput : defaultLogPath;
     const sortByType = options.sortByType === true || options.sortByType === 'true';
+
+    progress.percent('Preparing rip', at(0), 'Preparing rip output and logs...', { force: true });
 
     const loggerFormat = format.combine(
         format.colorize(),
@@ -128,11 +136,13 @@ module.exports = async (inputPath, outputPath, options) => {
 
     logger.info('*** Choops Extractor v0.5.0 output ***');
 
+    progress.percent('Loading hash map', at(2), 'Loading archive hash resolver...', { force: true });
     await hashUtil.hashLookupPromise;
     const controller = new ChoopsController(inputPath, options.gameName);
 
     const progressHandler = (data) => {
         logger.info(data.message);
+        progress.percent('Reading game archives', at(8), data.message || 'Reading game archives...', { indeterminate: true });
     }
 
     if (options.iffOnly) {
@@ -169,11 +179,13 @@ module.exports = async (inputPath, outputPath, options) => {
     const textureTempDir = path.join(outputPath, '_work', 'texture-conversion');
     await mkdir(textureTempDir);
 
+    progress.percent('Reading game archives', at(5), 'Reading archive table...', { force: true });
     controller.on('progress', progressHandler);
     await controller.read({
         buildCache: options.cache
     });
     controller.off('progress', progressHandler);
+    progress.percent('Selecting containers', at(15), 'Selecting archive containers to rip...', { force: true });
 
     let counter = 0;
     const textureReader = new ChoopsTextureReader({
@@ -220,10 +232,18 @@ module.exports = async (inputPath, outputPath, options) => {
         containers: []
     };
 
+    const totalContainers = Math.max(1, iffsToRead.length);
+    progress.percent('Ripping containers', at(20), `Ripping ${iffsToRead.length} archive containers...`, { force: true });
+
     for (const iffData of iffsToRead) {
         const bestContainerName = getBestContainerName(iffData);
         const canonicalName = iffData.name;
         const aliases = Array.isArray(iffData.aliases) ? iffData.aliases : [];
+        progress.percent(
+            'Ripping containers',
+            at(mapProgress(counter, totalContainers, 20, 75)),
+            `Ripping ${counter + 1}/${totalContainers}: ${bestContainerName}`
+        );
         logger.info(`${counter} - ${bestContainerName} (ArchiveName=${canonicalName}, Aliases=${aliases.join('|') || 'none'}, NameHash=${iffData.nameHash.toString(16).padStart(8, '0')}, GameFileIndex=${iffData.location}, GameFileOffset=${iffData.offset.toString(16)})`);
         
         const iffDataName = stripKnownExtension(bestContainerName);
@@ -417,6 +437,7 @@ module.exports = async (inputPath, outputPath, options) => {
         }
     }
 
+    progress.percent('Cleaning rip workspace', at(96), 'Cleaning texture conversion workspace...', { force: true });
     try {
         await fs.rm(textureTempDir, { recursive: true, force: true });
     }
@@ -428,4 +449,6 @@ module.exports = async (inputPath, outputPath, options) => {
         await mkdir(path.join(outputPath, '_summary'));
         await writeJson(path.join(outputPath, '_summary', 'rip_manifest.json'), masterManifest);
     }
+
+    progress.percent('Rip complete', at(100), 'Base rip pass complete.', { force: true });
 };
