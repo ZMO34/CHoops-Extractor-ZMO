@@ -5,6 +5,7 @@ const mkdir = require('make-dir');
 const ripperV2 = require('./ripperV2');
 const cdfBackedIffExtractor = require('./cdfBackedIffExtractor');
 const ChoopsTextureReader = require('../2k-tools/src/parser/choops/ChoopsTextureReaderInline');
+const { createProgressReporter, mapProgress } = require('./util/progress');
 
 function safeName(value) {
     return String(value || 'asset').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
@@ -91,11 +92,17 @@ function decodeNameMetadata(buffer) {
     };
 }
 
-async function enhanceNameMetadataLogging(outputPath, logPath) {
+async function enhanceNameMetadataLogging(outputPath, logPath, progress, basePercent, spanPercent) {
     const files = await walkFiles(outputPath);
     let metadataFiles = 0;
+    let visited = 0;
 
     for (const filePath of files) {
+        visited += 1;
+        if (visited % 100 === 0 || visited === files.length) {
+            progress.percent('Enhanced rip: NAME metadata', mapProgress(visited, Math.max(1, files.length), basePercent, spanPercent), `Scanning NAME metadata ${visited}/${files.length}`);
+        }
+
         const lower = filePath.toLowerCase();
 
         if (lower.endsWith('.name')) {
@@ -131,14 +138,20 @@ async function enhanceNameMetadataLogging(outputPath, logPath) {
     await appendLog(logPath, `[SUMMARY] NAME metadata files logged=${metadataFiles}; NAME is coordinate metadata, not a DDS texture.`);
 }
 
-async function enhanceCdfBackedExtraction(outputPath, textureReader, logPath, options) {
+async function enhanceCdfBackedExtraction(outputPath, textureReader, logPath, options, progress, basePercent, spanPercent) {
     const files = await walkFiles(outputPath);
     const iffFiles = files.filter((file) => file.toLowerCase().endsWith('.iff'));
     let pairsExtracted = 0;
+    let visited = 0;
 
     const logger = { info: async (message) => appendLog(logPath, message) };
 
     for (const iffPath of iffFiles) {
+        visited += 1;
+        if (visited % 25 === 0 || visited === iffFiles.length) {
+            progress.percent('Enhanced rip: CDF pairs', mapProgress(visited, Math.max(1, iffFiles.length), basePercent, spanPercent), `Scanning CDF-backed pairs ${visited}/${iffFiles.length}`);
+        }
+
         try {
             const iffBuffer = await fs.readFile(iffPath);
             if (readUInt32BE(iffBuffer, 0) !== cdfBackedIffExtractor.CDF_BACKED_IFF_MAGIC) continue;
@@ -186,12 +199,18 @@ async function enhanceCdfBackedExtraction(outputPath, textureReader, logPath, op
     await appendLog(logPath, `[SUMMARY] CDF-backed pairs extracted=${pairsExtracted}`);
 }
 
-async function logStandardIffPreservation(outputPath, logPath) {
+async function logStandardIffPreservation(outputPath, logPath, progress, basePercent, spanPercent) {
     const files = await walkFiles(outputPath);
     const iffFiles = files.filter((file) => file.toLowerCase().endsWith('.iff'));
 
     let standardCount = 0;
+    let visited = 0;
     for (const iffPath of iffFiles) {
+        visited += 1;
+        if (visited % 25 === 0 || visited === iffFiles.length) {
+            progress.percent('Enhanced rip: standard IFFs', mapProgress(visited, Math.max(1, iffFiles.length), basePercent, spanPercent), `Inspecting standard IFFs ${visited}/${iffFiles.length}`);
+        }
+
         try {
             const buffer = await fs.readFile(iffPath);
             if (readUInt32BE(buffer, 0) !== cdfBackedIffExtractor.STANDARD_IFF_MAGIC) continue;
@@ -220,7 +239,16 @@ async function logStandardIffPreservation(outputPath, logPath) {
 }
 
 module.exports = async (inputPath, outputPath, options = {}) => {
-    await ripperV2(inputPath, outputPath, options);
+    const progress = createProgressReporter(options);
+    const basePercent = Number.isFinite(Number(options.progressBase)) ? Number(options.progressBase) : 0;
+    const spanPercent = Number.isFinite(Number(options.progressSpan)) ? Number(options.progressSpan) : 100;
+    const at = (localPercent) => Math.max(0, Math.min(100, basePercent + ((localPercent / 100) * spanPercent)));
+
+    await ripperV2(inputPath, outputPath, {
+        ...options,
+        progressBase: at(0),
+        progressSpan: spanPercent * 0.80
+    });
 
     const enhancementLog = path.join(outputPath, '_logs', `choops-enhanced-rip_${Date.now().toString()}.txt`);
     const textureTempDir = path.join(outputPath, '_work', 'texture-conversion-enhanced');
@@ -231,9 +259,12 @@ module.exports = async (inputPath, outputPath, options = {}) => {
     await appendLog(enhancementLog, '*** Choops enhanced rip pass ***');
     await appendLog(enhancementLog, 'Adds deterministic CDF/IFF extraction, audio payload extraction, NAME metadata logging, and preservation notes.');
 
-    await logStandardIffPreservation(outputPath, enhancementLog);
-    await enhanceCdfBackedExtraction(outputPath, textureReader, enhancementLog, options);
-    await enhanceNameMetadataLogging(outputPath, enhancementLog);
+    progress.percent('Enhanced rip pass', at(82), 'Inspecting standard IFF preservation details...', { force: true });
+    await logStandardIffPreservation(outputPath, enhancementLog, progress, at(82), spanPercent * 0.05);
+    progress.percent('Enhanced rip pass', at(88), 'Extracting CDF-backed pairs...', { force: true });
+    await enhanceCdfBackedExtraction(outputPath, textureReader, enhancementLog, options, progress, at(88), spanPercent * 0.07);
+    progress.percent('Enhanced rip pass', at(96), 'Logging NAME metadata and audio payloads...', { force: true });
+    await enhanceNameMetadataLogging(outputPath, enhancementLog, progress, at(96), spanPercent * 0.03);
 
     try {
         await fs.rm(textureTempDir, { recursive: true, force: true });
@@ -241,4 +272,6 @@ module.exports = async (inputPath, outputPath, options = {}) => {
     catch (err) {
         await appendLog(enhancementLog, `[WARN] Failed to clean enhanced temp directory: ${err.message || err}`);
     }
+
+    progress.percent('Rip complete', at(100), 'Rip complete.', { force: true });
 };
