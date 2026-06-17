@@ -8,7 +8,7 @@
   },
   "main": "index.js",
   "scripts": {
-    "pack:cli": "pkg -t node18-win-x64 -o dist/choops-extractor.exe --compress GZip . && node scripts/copy-native-tools.js",
+    "pack:cli": "pkg -t node18-win-x64 -o dist/choops-extractor.exe --compress GZip index.js && node scripts/copy-native-tools.js",
     "pack:desktop": "npm run pack:cli && electron-builder --win portable",
     "pack": "npm run pack:desktop",
     "desktop": "electron desktop.js",
