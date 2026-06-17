@@ -74,14 +74,14 @@ async function revertBuiltArchivesIfPresent(controller) {
     }
 }
 
-module.exports = async (pathToGameFiles, pathToMod) => {
-    const controller = new ChoopsController(pathToGameFiles);
+module.exports = async (pathToGameFiles, pathToMod, options = {}) => {
+    const controller = new ChoopsController(pathToGameFiles, options.gameName);
     await revertBuiltArchivesIfPresent(controller);
     await controller.read();
 
     // Find if there are any IFFs at the mod base level
     const contents = await fs.readdir(pathToMod);
-    
+
     for (let content of contents) {
         const contentPath = path.join(pathToMod, content);
         const stat = await fs.lstat(contentPath);
@@ -94,7 +94,7 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                     // import entire standard IFF through the existing parser path
                     let modIffController = await new Promise((resolve, reject) => {
                         const parser = new IFFReader();
-            
+
                         pipeline(
                             fsOld.createReadStream(contentPath),
                             parser,
@@ -102,7 +102,7 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                                 if (err) reject(err);
                                 else resolve(parser.controller);
                             }
-                        )
+                        );
                     });
 
                     let iffCacheEntry = await controller.getEntryByName(content);
@@ -156,7 +156,7 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                     const piecesToReplace = await fs.readdir(subContentPath);
                     let subfileName = subContent.substring(1);
                     let type;
-                    
+
                     if (subfileName.indexOf('.') >= 0) {
                         const splitName = subfileName.split('.');
                         subfileName = splitName[0];
@@ -172,8 +172,8 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                     }
 
                     for (let piece of piecesToReplace) {
-                        const piecePath = path.join(subContentPath, piece);                        
-                        
+                        const piecePath = path.join(subContentPath, piece);
+
                         if (path.extname(piecePath) === '.gtf') {
                             const textureWriter = new ChoopsTextureWriter();
                             const packageFileName = path.basename(piece, '.gtf');
@@ -187,7 +187,7 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                             else {
                                 // SCNE
                                 const packageFile = subfileController.getTextureByName(packageFileName);
-        
+
                                 if (packageFile) {
                                     await textureWriter.toPackageFileFromGtf(gtfData, packageFile);
                                     logFileReplacement(`${iff}/${subfileName}/${packageFileName}`, piecePath);
@@ -210,7 +210,7 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                             else {
                                 // SCNE
                                 const packageFile = subfileController.getTextureByName(packageFileName);
-        
+
                                 if (packageFile) {
                                     await textureWriter.toPackageFileFromDDSPath(piecePath, packageFile);
                                     logFileReplacement(`${iff}/${subfileName}/${packageFileName}`, piecePath);
@@ -231,7 +231,7 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                     // import entire subfile
                     let subfileName = subContent;
                     let type;
-                    
+
                     if (subfileName.indexOf('.') >= 0) {
                         const splitName = subfileName.split('.');
                         subfileName = splitName[0];
@@ -259,7 +259,7 @@ module.exports = async (pathToGameFiles, pathToMod) => {
                                     resolve(toolWrappedReader.file);
                                 }
                             }
-                        )
+                        );
                     });
 
                     if (wrappedFile.numberOfBlocks !== subfileController.dataBlocks.length) {
