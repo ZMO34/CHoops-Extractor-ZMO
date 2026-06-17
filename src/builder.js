@@ -9,6 +9,7 @@ const ToolWrappedReader = require('../2k-tools/src/parser/ToolWrappedReader');
 const ChoopsController = require('../2k-tools/src/controller/ChoopsController');
 const ChoopsTextureWriter = require('../2k-tools/src/parser/choops/ChoopsTextureWriter');
 const cdfBackedIffRebuilder = require('./cdfBackedIffRebuilder');
+const { createProgressReporter, mapProgress } = require('./util/progress');
 
 async function pathExists(filePath) {
     try {
@@ -75,16 +76,33 @@ async function revertBuiltArchivesIfPresent(controller) {
 }
 
 module.exports = async (pathToGameFiles, pathToMod, options = {}) => {
+    const progress = createProgressReporter(options);
+    const basePercent = Number.isFinite(Number(options.progressBase)) ? Number(options.progressBase) : 0;
+    const spanPercent = Number.isFinite(Number(options.progressSpan)) ? Number(options.progressSpan) : 100;
+    const at = (localPercent) => Math.max(0, Math.min(100, basePercent + ((localPercent / 100) * spanPercent)));
+
+    progress.percent('Preparing build', at(0), 'Preparing build controller...', { force: true });
     const controller = new ChoopsController(pathToGameFiles, options.gameName);
+
+    progress.percent('Reverting working copy state', at(4), 'Reverting previous build state in the working copy...', { force: true });
     await revertBuiltArchivesIfPresent(controller);
+
+    progress.percent('Reading game archives', at(8), 'Reading game archive table...', { force: true });
     await controller.read();
 
-    // Find if there are any IFFs at the mod base level
+    progress.percent('Scanning mod folder', at(15), 'Scanning mod folder...', { force: true });
     const contents = await fs.readdir(pathToMod);
+    const totalContents = Math.max(1, contents.length);
+    let processedContents = 0;
 
     for (let content of contents) {
         const contentPath = path.join(pathToMod, content);
         const stat = await fs.lstat(contentPath);
+        progress.percent(
+            'Applying overrides',
+            at(mapProgress(processedContents, totalContents, 18, 67)),
+            `Applying ${processedContents + 1}/${totalContents}: ${content}`
+        );
 
         if (stat.isFile()) {
             const ext = path.extname(content).toLowerCase();
@@ -137,6 +155,7 @@ module.exports = async (pathToGameFiles, pathToMod, options = {}) => {
                     cdfEntry.rawReplacementBuffer = rebuiltPair.cdfBuffer;
                     logFileReplacement(`${content}.iff`, `${contentPath} (${rebuiltPair.summary.modifiedRecords} modified CDF records)`);
                     logFileReplacement(`${content}.cdf`, `${contentPath} (${rebuiltPair.summary.rebuiltCdfSize} bytes)`);
+                    processedContents += 1;
                     continue;
                 }
             }
@@ -148,8 +167,16 @@ module.exports = async (pathToGameFiles, pathToMod, options = {}) => {
             subContents.sort();
             subContents.reverse();  // Ensure any texture overrides in SCNEs are performed after the subfile replacement
 
+            let processedSubContents = 0;
+            const totalSubContents = Math.max(1, subContents.length);
+
             for (let subContent of subContents) {
                 const subContentPath = path.join(contentPath, subContent);
+                progress.percent(
+                    'Applying overrides',
+                    at(mapProgress(processedContents + (processedSubContents / totalSubContents), totalContents, 18, 67)),
+                    `Applying ${content}/${subContent}`
+                );
 
                 if (subContent.indexOf('_') === 0) {
                     // import a piece of a subfile - it's a directory
@@ -168,6 +195,7 @@ module.exports = async (pathToGameFiles, pathToMod, options = {}) => {
 
                     if (!subfileController) {
                         console.error(`Error: Cannot find a subfile named "${subfileName}" in ${iff}. Skipping this file.`);
+                        processedSubContents += 1;
                         continue;
                     }
 
@@ -243,6 +271,7 @@ module.exports = async (pathToGameFiles, pathToMod, options = {}) => {
 
                     if (!subfileController) {
                         console.error(`Error: Cannot find a subfile named "${subfileName}" in ${iff}. Skipping this file.`);
+                        processedSubContents += 1;
                         continue;
                     }
 
@@ -275,12 +304,23 @@ module.exports = async (pathToGameFiles, pathToMod, options = {}) => {
                         });
                     }
                 }
+
+                processedSubContents += 1;
             }
         }
+
+        processedContents += 1;
+        progress.percent(
+            'Applying overrides',
+            at(mapProgress(processedContents, totalContents, 18, 67)),
+            `Applied ${processedContents}/${totalContents} mod entries`
+        );
     }
 
     console.log('Import Complete.\n\nRepacking files...This may take awhile.');
+    progress.percent('Repacking archives', at(88), 'Repacking modified archives...', { force: true });
     await controller.repack(false);
+    progress.percent('Complete', at(100), 'Build complete.', { force: true });
     console.log('Repacking Complete.');
 };
 
