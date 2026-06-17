@@ -1,16 +1,19 @@
 {
   "name": "choops-extractor",
-  "version": "0.6.1",
-  "description": "A command-line utility and research suite for College Hoops 2K8 (PS3) textures, archives, CDF/IFF pairs, rosters, and GUI workflows",
+  "version": "0.6.2",
+  "description": "A desktop and command-line research suite for College Hoops 2K8 PS3 textures, archives, CDF/IFF pairs, rosters, and modding workflows",
   "bin": {
     "choops-extractor": "./index.js",
-    "choops-roster": "./roster.js",
-    "choops-gui": "./gui.js"
+    "choops-roster": "./roster.js"
   },
   "main": "index.js",
   "scripts": {
-    "pack": "pkg -t node18-win-x64 -o dist/choops-extractor.exe --compress GZip . && pkg -t node18-win-x64 -o dist/choops-gui.exe --compress GZip gui.js && node scripts/copy-native-tools.js",
-    "gui": "node gui.js",
+    "pack:cli": "pkg -t node18-win-x64 -o dist/choops-extractor.exe --compress GZip . && node scripts/copy-native-tools.js",
+    "pack:desktop": "npm run pack:cli && electron-builder --win portable",
+    "pack": "npm run pack:desktop",
+    "desktop": "electron desktop.js",
+    "gui": "electron desktop.js",
+    "gui:browser": "node gui.js",
     "roster": "node roster.js",
     "roster-studio": "node src/rosterStudioServer.js"
   },
@@ -26,15 +29,51 @@
     "uuid": "^8.3.2",
     "winston": "^3.7.2"
   },
+  "devDependencies": {
+    "chai": "^4.3.6",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
+    "mocha": "^10.0.0",
+    "pkg": "^5.8.1"
+  },
   "pkg": {
     "assets": [
       "./2k-tools/lib/gtf2dds.exe",
       "./2k-tools/lib/dds2gtf.exe"
     ]
   },
-  "devDependencies": {
-    "chai": "^4.3.6",
-    "mocha": "^10.0.0",
-    "pkg": "^5.8.1"
+  "build": {
+    "appId": "com.choops.extractor.desktop",
+    "productName": "CHoops Modding Suite",
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "extraMetadata": {
+      "main": "desktop.js"
+    },
+    "files": [
+      "desktop.js",
+      "gui.js",
+      "index.js",
+      "roster.js",
+      "src/**/*",
+      "2k-tools/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/choops-extractor.exe",
+        "to": "choops-extractor.exe"
+      },
+      {
+        "from": "2k-tools/lib",
+        "to": "2k-tools/lib"
+      }
+    ],
+    "win": {
+      "target": "portable",
+      "artifactName": "choops-desktop.exe"
+    },
+    "asar": false
   }
 }
