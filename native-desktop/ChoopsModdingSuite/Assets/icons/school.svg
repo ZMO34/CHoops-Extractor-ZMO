@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="School icon">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#061b2f"/><stop offset="1" stop-color="#082f4e"/></linearGradient></defs>
+  <path d="M34 105L128 35l94 70" fill="#07121f" stroke="#f8fdff" stroke-width="12" stroke-linejoin="round"/>
+  <rect x="53" y="105" width="150" height="94" fill="url(#bg)" stroke="#60d2ff" stroke-width="6"/>
+  <circle cx="128" cy="83" r="15" fill="#f8fdff" stroke="#60d2ff" stroke-width="4"/>
+  <path d="M76 124h28v65H76zm76 0h28v65h-28zm-39 0h30v65h-30z" fill="#f8fdff"/>
+  <path d="M44 199h168v18H44z" fill="#07121f" stroke="#60d2ff" stroke-width="5"/>
+  <path d="M164 60v-36m0 0l42 13-42 14" fill="none" stroke="#60d2ff" stroke-width="8" stroke-linecap="round"/>
+</svg>
