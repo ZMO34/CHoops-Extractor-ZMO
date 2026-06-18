@@ -1,6 +1,6 @@
 {
   "name": "choops-extractor",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "A native desktop and command-line research suite for College Hoops 2K8 PS3 textures, archives, CDF/IFF pairs, rosters, and modding workflows",
   "bin": {
     "choops-extractor": "./index.js",
@@ -8,10 +8,11 @@
   },
   "main": "index.js",
   "scripts": {
+    "check:dotnet": "node scripts/check-dotnet-sdk.js",
     "pack:cli": "pkg -t node18-win-x64 -o dist/choops-extractor.exe --compress GZip index.js && node scripts/copy-native-tools.js",
-    "pack:native": "npm run pack:cli && dotnet publish native-desktop/ChoopsModdingSuite/ChoopsModdingSuite.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -o dist-native",
+    "pack:native": "npm run pack:cli && npm run check:dotnet && dotnet publish native-desktop/ChoopsModdingSuite/ChoopsModdingSuite.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -o dist-native",
     "pack": "npm run pack:native",
-    "desktop": "npm run pack:cli && dotnet run --project native-desktop/ChoopsModdingSuite/ChoopsModdingSuite.csproj",
+    "desktop": "npm run pack:cli && npm run check:dotnet && dotnet run --project native-desktop/ChoopsModdingSuite/ChoopsModdingSuite.csproj",
     "roster": "node roster.js"
   },
   "author": "",
