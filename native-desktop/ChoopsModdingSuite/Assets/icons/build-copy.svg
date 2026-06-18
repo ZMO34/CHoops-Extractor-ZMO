@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Safe build copy icon">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#061b2f"/><stop offset="1" stop-color="#082f4e"/></linearGradient></defs>
+  <path d="M128 24l92 53v104l-92 51-92-51V77z" fill="url(#bg)" stroke="#f8fdff" stroke-width="9" stroke-linejoin="round"/>
+  <path d="M36 77l92 54 92-54M128 131v101" fill="none" stroke="#60d2ff" stroke-width="7" stroke-linejoin="round"/>
+  <circle cx="181" cy="176" r="38" fill="#2abc5a" stroke="#f8fdff" stroke-width="7"/>
+  <path d="M162 176l14 14 27-33" fill="none" stroke="#f8fdff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
