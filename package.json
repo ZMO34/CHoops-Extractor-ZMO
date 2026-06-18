@@ -13,6 +13,8 @@
     "pack:native": "npm run pack:cli && npm run check:dotnet && dotnet publish native-desktop/ChoopsModdingSuite/ChoopsModdingSuite.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -o dist-native",
     "pack": "npm run pack:native",
     "desktop": "npm run pack:cli && npm run check:dotnet && dotnet run --project native-desktop/ChoopsModdingSuite/ChoopsModdingSuite.csproj",
+    "gui": "node gui.js",
+    "gui:native": "node gui.js",
     "roster": "node roster.js"
   },
   "author": "",
