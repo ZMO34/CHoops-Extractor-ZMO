@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#021426"/>
+      <stop offset="1" stop-color="#043e67"/>
+    </linearGradient>
+    <linearGradient id="ball" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#be6b18"/>
+      <stop offset="1" stop-color="#552508"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="42" fill="url(#bg)" stroke="#e1a92a" stroke-width="12"/>
+  <rect x="31" y="31" width="194" height="194" rx="30" fill="none" stroke="#73dbff" stroke-width="6" opacity=".95"/>
+  <circle cx="128" cy="91" r="54" fill="url(#ball)" stroke="#e1a92a" stroke-width="7"/>
+  <path d="M128 38v106M79 76c22 13 76 13 98 0M79 106c22-13 76-13 98 0" fill="none" stroke="#e1a92a" stroke-width="7" stroke-linecap="round"/>
+  <g filter="url(#glow)">
+    <text x="94" y="159" text-anchor="middle" font-family="Segoe UI Black, Arial Black, sans-serif" font-size="62" font-weight="900" fill="#f8fdff">CH</text>
+    <text x="174" y="158" text-anchor="middle" font-family="Segoe UI Black, Arial Black, sans-serif" font-size="50" font-weight="900" fill="#e1a92a">2K</text>
+    <text x="128" y="194" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="800" letter-spacing="3" fill="#bfefff">REBORN</text>
+  </g>
+</svg>
