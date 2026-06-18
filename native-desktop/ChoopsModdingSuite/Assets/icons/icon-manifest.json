@@ -1,0 +1,44 @@
+{
+  "theme": "College Hoops Reborn icy-blue native GUI",
+  "format": "svg source + runtime GDI+ rendering",
+  "inspiration": [
+    "College Hoops Reborn mockup header badge",
+    "CHRB2K blue/gold wordmark direction",
+    "Reborn Sports Network circular badge direction",
+    "basketball, school, roster, scouting, and asset-management symbols"
+  ],
+  "icons": {
+    "app": "app-brand.svg",
+    "dashboard": "dashboard.svg",
+    "school": "school.svg",
+    "spirit": "spirit.svg",
+    "colors": "colors-court.svg",
+    "rosterSlots": "roster-slots.svg",
+    "rotation": "rotation.svg",
+    "assets": "assets.svg",
+    "conferences": "conferences.svg",
+    "research": "research.svg",
+    "folder": "folder.svg",
+    "save": "save.svg",
+    "buildCopy": "build-copy.svg",
+    "rip": "rip.svg",
+    "cache": "cache.svg"
+  },
+  "uiMapping": {
+    "Dashboard": "dashboard",
+    "School": "school",
+    "Spirit": "spirit",
+    "Colors / Floor / Basket / Cheer": "colors",
+    "Roster Slots": "rosterSlots",
+    "Depth Chart / Rotation": "rotation",
+    "Assets": "assets",
+    "Conferences": "conferences",
+    "Unknown / Research": "research",
+    "Open Roster": "folder",
+    "Browse": "folder",
+    "Save Copy With Queued Edits": "save",
+    "Safe Build Copy": "buildCopy",
+    "Dynamic Full Rip": "rip",
+    "Build Cache": "cache"
+  }
+}
