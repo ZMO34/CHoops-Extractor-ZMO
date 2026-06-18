@@ -1,7 +1,8 @@
 using System;
 using System.Drawing;
-using System.IO;
+using System.Drawing.Drawing2D;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace ChoopsModdingSuite;
@@ -9,15 +10,17 @@ namespace ChoopsModdingSuite;
 /// <summary>
 /// One-shot native startup stabilization only.
 ///
-/// This file intentionally does NOT subscribe to repeated idle/layout/resize loops. The
-/// previous implementation mutated layout on every Application.Idle and during FlowLayout
-/// Layout events, which caused Dashboard, Spirit, and Unknown/Research to flash rapidly.
-/// Keep this class limited to safe one-time startup work: apply the app icon and give
-/// top-tab buttons enough space so their text is not clipped.
+/// No generated .ico files, no repeated idle/layout repair loops, and no post-render icon
+/// mutation pass. The repo carries the static SVG source asset in Assets/app-icon.svg, while
+/// this class renders the same simple CH/Reborn basketball mark directly for the running
+/// window/taskbar icon.
 /// </summary>
 internal static class IconRuntimePolish
 {
     private static bool Applied;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
 
     [ModuleInitializer]
     internal static void Initialize()
@@ -33,43 +36,96 @@ internal static class IconRuntimePolish
 
         foreach (Form form in Application.OpenForms)
         {
-            ApplyIcon(form);
+            ApplyRuntimeIcon(form);
             FixTabButtons(form);
         }
     }
 
-    private static void ApplyIcon(Form form)
+    private static void ApplyRuntimeIcon(Form form)
     {
-        foreach (var path in new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "app.ico"),
-            Path.Combine(AppContext.BaseDirectory, "Assets", "app.ico"),
-            Path.Combine(Directory.GetCurrentDirectory(), "release", "app.ico"),
-            Path.Combine(Directory.GetCurrentDirectory(), "native-desktop", "ChoopsModdingSuite", "Assets", "app.ico")
-        })
-        {
-            if (!File.Exists(path)) continue;
-            try
-            {
-                using var icon = new Icon(path);
-                form.Icon = (Icon)icon.Clone();
-                return;
-            }
-            catch
-            {
-                // Try the next candidate.
-            }
-        }
-
         try
         {
-            var embedded = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-            if (embedded != null) form.Icon = embedded;
+            form.Icon = CreateRuntimeIcon(256);
         }
         catch
         {
-            // If Windows cannot extract an icon, keep the default icon rather than crashing.
+            // Never crash startup because of icon rendering.
         }
+    }
+
+    private static Icon CreateRuntimeIcon(int size)
+    {
+        using var bitmap = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(bitmap))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            g.Clear(Color.Transparent);
+
+            var navyTop = Color.FromArgb(255, 3, 21, 38);
+            var navyBottom = Color.FromArgb(255, 4, 62, 103);
+            var ice = Color.FromArgb(255, 115, 219, 255);
+            var white = Color.FromArgb(255, 248, 253, 255);
+            var gold = Color.FromArgb(255, 225, 169, 42);
+            var ballTop = Color.FromArgb(255, 190, 107, 24);
+            var ballBottom = Color.FromArgb(255, 85, 37, 8);
+
+            var outer = new RectangleF(size * .055f, size * .055f, size * .89f, size * .89f);
+            using var outerPath = RoundRect(outer, size * .18f);
+            using var bg = new LinearGradientBrush(outer, navyTop, navyBottom, 90f);
+            using var goldPen = new Pen(gold, Math.Max(5, size * .045f));
+            using var icePen = new Pen(ice, Math.Max(2, size * .022f));
+            g.FillPath(bg, outerPath);
+            g.DrawPath(goldPen, outerPath);
+
+            var inner = new RectangleF(size * .135f, size * .135f, size * .73f, size * .73f);
+            using var innerPath = RoundRect(inner, size * .13f);
+            g.DrawPath(icePen, innerPath);
+
+            var ball = new RectangleF(size * .20f, size * .18f, size * .60f, size * .44f);
+            using var ballBrush = new LinearGradientBrush(ball, ballTop, ballBottom, 90f);
+            using var seamPen = new Pen(gold, Math.Max(3, size * .028f)) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.FillEllipse(ballBrush, ball);
+            g.DrawEllipse(seamPen, ball);
+            g.DrawArc(seamPen, ball, 205, 130);
+            g.DrawArc(seamPen, ball, 25, 130);
+            g.DrawLine(seamPen, size * .50f, size * .19f, size * .50f, size * .61f);
+
+            DrawCenteredText(g, "CH", new RectangleF(size * .13f, size * .49f, size * .43f, size * .24f), white, size * .26f, "Segoe UI Black");
+            DrawCenteredText(g, "2K", new RectangleF(size * .54f, size * .50f, size * .31f, size * .23f), gold, size * .23f, "Segoe UI Black");
+            DrawCenteredText(g, "REBORN", new RectangleF(size * .18f, size * .75f, size * .64f, size * .095f), ice, size * .075f, "Segoe UI");
+        }
+
+        var handle = bitmap.GetHicon();
+        try
+        {
+            using var temp = Icon.FromHandle(handle);
+            return (Icon)temp.Clone();
+        }
+        finally
+        {
+            DestroyIcon(handle);
+        }
+    }
+
+    private static GraphicsPath RoundRect(RectangleF rect, float radius)
+    {
+        var path = new GraphicsPath();
+        var d = radius * 2;
+        path.AddArc(rect.Left, rect.Top, d, d, 180, 90);
+        path.AddArc(rect.Right - d, rect.Top, d, d, 270, 90);
+        path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+        path.AddArc(rect.Left, rect.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private static void DrawCenteredText(Graphics g, string text, RectangleF rect, Color color, float size, string family)
+    {
+        using var font = new Font(family, size, FontStyle.Bold, GraphicsUnit.Pixel);
+        using var brush = new SolidBrush(color);
+        using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString(text, font, brush, rect, format);
     }
 
     private static void FixTabButtons(Control root)
@@ -86,7 +142,7 @@ internal static class IconRuntimePolish
             button.Padding = new Padding(12, 0, 12, 0);
             button.Margin = new Padding(0, 0, 8, 0);
 
-            var width = button.Text switch
+            button.Width = button.Text switch
             {
                 "Dashboard" => 124,
                 "School" => 104,
@@ -99,7 +155,6 @@ internal static class IconRuntimePolish
                 "Unknown / Research" => 178,
                 _ => Math.Max(120, button.Width)
             };
-            button.Width = width;
         }
     }
 
