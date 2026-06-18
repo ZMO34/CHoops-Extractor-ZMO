@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Spirit icon">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#061b2f"/><stop offset="1" stop-color="#082f4e"/></linearGradient><linearGradient id="ice" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f8fdff"/><stop offset="1" stop-color="#60d2ff"/></linearGradient></defs>
+  <path d="M36 131l126-72v134z" fill="url(#bg)" stroke="#f8fdff" stroke-width="12" stroke-linejoin="round"/>
+  <ellipse cx="174" cy="126" rx="34" ry="74" fill="#07121f" stroke="#60d2ff" stroke-width="8"/>
+  <path d="M54 122h-25v28h25" fill="#07121f" stroke="#f8fdff" stroke-width="9"/>
+  <path d="M68 145l28 58h35l-34-75" fill="#07121f" stroke="#f8fdff" stroke-width="9" stroke-linejoin="round"/>
+  <path d="M74 126l58-21-21 42z" fill="url(#ice)" stroke="#f8fdff" stroke-width="5"/>
+</svg>
