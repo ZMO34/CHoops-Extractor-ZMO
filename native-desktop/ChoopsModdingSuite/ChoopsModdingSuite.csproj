@@ -7,16 +7,13 @@
     <Nullable>enable</Nullable>
     <AssemblyName>choops-native-desktop</AssemblyName>
     <RootNamespace>ChoopsModdingSuite</RootNamespace>
-    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
-  <Target Name="GenerateAppIcon" BeforeTargets="BeforeBuild">
-    <MakeDir Directories="Assets" />
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\Assets\generate-app-icon.ps1&quot; -OutputPath &quot;$(MSBuildProjectDirectory)\Assets\app.ico&quot;" />
-  </Target>
-
   <ItemGroup>
-    <None Include="Assets\generate-app-icon.ps1" />
+    <None Include="Assets\app-icon.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
     <None Include="Assets\icons\*.svg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
@@ -25,11 +22,7 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
-    <None Include="Assets\app.ico" Condition="Exists('Assets\app.ico')">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
-    <None Include="..\..\dist\choops-extractor.exe" Link="choops-extractor.exe" Condition="Exists('..\..\dist\choops-extractor.exe')">
+    <None Include="..\..\release\choops-extractor.exe" Link="choops-extractor.exe" Condition="Exists('..\..\release\choops-extractor.exe')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
