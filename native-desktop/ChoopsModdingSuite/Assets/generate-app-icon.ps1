@@ -16,7 +16,7 @@ function New-RoundRectPath([System.Drawing.RectangleF]$Rect, [float]$Radius) {
     return $path
 }
 
-function Draw-CenteredText($Graphics, [string]$Text, [System.Drawing.RectangleF]$Rect, [System.Drawing.Color]$Color, [float]$Size, [string]$Family = "Segoe UI") {
+function Draw-CenteredText($Graphics, [string]$Text, [System.Drawing.RectangleF]$Rect, [System.Drawing.Color]$Color, [float]$Size, [string]$Family = "Segoe UI Black") {
     $font = New-Object System.Drawing.Font $Family, $Size, ([System.Drawing.FontStyle]::Bold), ([System.Drawing.GraphicsUnit]::Pixel)
     $brush = New-Object System.Drawing.SolidBrush $Color
     $format = New-Object System.Drawing.StringFormat
@@ -26,18 +26,6 @@ function Draw-CenteredText($Graphics, [string]$Text, [System.Drawing.RectangleF]
     $format.Dispose(); $brush.Dispose(); $font.Dispose()
 }
 
-function Draw-Star($Graphics, [float]$Cx, [float]$Cy, [float]$Radius, [System.Drawing.Color]$Color) {
-    $points = New-Object 'System.Collections.Generic.List[System.Drawing.PointF]'
-    for ($i = 0; $i -lt 10; $i++) {
-        $angle = -[Math]::PI / 2 + $i * [Math]::PI / 5
-        $r = if ($i % 2 -eq 0) { $Radius } else { $Radius * 0.42 }
-        $points.Add([System.Drawing.PointF]::new($Cx + [Math]::Cos($angle) * $r, $Cy + [Math]::Sin($angle) * $r))
-    }
-    $brush = New-Object System.Drawing.SolidBrush $Color
-    $Graphics.FillPolygon($brush, $points.ToArray())
-    $brush.Dispose()
-}
-
 function New-IconPngBytes([int]$Size) {
     $bitmap = New-Object System.Drawing.Bitmap $Size, $Size, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
@@ -45,63 +33,62 @@ function New-IconPngBytes([int]$Size) {
     $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
     $graphics.Clear([System.Drawing.Color]::Transparent)
 
-    $outer = [System.Drawing.RectangleF]::new($Size * 0.06, $Size * 0.06, $Size * 0.88, $Size * 0.88)
-    $inner = [System.Drawing.RectangleF]::new($Size * 0.13, $Size * 0.13, $Size * 0.74, $Size * 0.74)
-    $band = [System.Drawing.RectangleF]::new($Size * 0.12, $Size * 0.45, $Size * 0.76, $Size * 0.24)
-
-    $navyTop = [System.Drawing.Color]::FromArgb(255, 6, 27, 47)
-    $navyBottom = [System.Drawing.Color]::FromArgb(255, 8, 56, 94)
-    $ice = [System.Drawing.Color]::FromArgb(255, 96, 210, 255)
-    $ice2 = [System.Drawing.Color]::FromArgb(255, 210, 240, 255)
+    $navyTop = [System.Drawing.Color]::FromArgb(255, 3, 21, 38)
+    $navyBottom = [System.Drawing.Color]::FromArgb(255, 4, 62, 103)
+    $ice = [System.Drawing.Color]::FromArgb(255, 115, 219, 255)
     $white = [System.Drawing.Color]::FromArgb(255, 248, 253, 255)
-    $gold = [System.Drawing.Color]::FromArgb(255, 221, 163, 36)
-    $darkBand = [System.Drawing.Color]::FromArgb(238, 3, 18, 31)
+    $gold = [System.Drawing.Color]::FromArgb(255, 225, 169, 42)
+    $goldDark = [System.Drawing.Color]::FromArgb(255, 148, 92, 8)
+    $ball = [System.Drawing.Color]::FromArgb(255, 160, 85, 16)
+    $ballDark = [System.Drawing.Color]::FromArgb(255, 84, 37, 8)
 
-    $outerPath = New-RoundRectPath $outer ($Size * 0.14)
-    $innerPath = New-RoundRectPath $inner ($Size * 0.10)
-    $bandPath = New-RoundRectPath $band ($Size * 0.06)
+    $outer = [System.Drawing.RectangleF]::new($Size * 0.055, $Size * 0.055, $Size * 0.89, $Size * 0.89)
+    $outerPath = New-RoundRectPath $outer ($Size * 0.18)
+    $bgBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush $outer, $navyTop, $navyBottom, 90
+    $graphics.FillPath($bgBrush, $outerPath)
 
-    $navyBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush $outer, $navyTop, $navyBottom, 90
-    $graphics.FillPath($navyBrush, $outerPath)
-    $goldPen = New-Object System.Drawing.Pen $gold, ([Math]::Max(2, [int]($Size * 0.035)))
+    $goldPen = New-Object System.Drawing.Pen $gold, ([Math]::Max(2, [int]($Size * 0.045)))
+    $icePen = New-Object System.Drawing.Pen $ice, ([Math]::Max(1, [int]($Size * 0.022)))
     $graphics.DrawPath($goldPen, $outerPath)
-    $icePen = New-Object System.Drawing.Pen $ice, ([Math]::Max(2, [int]($Size * 0.022)))
+
+    $inner = [System.Drawing.RectangleF]::new($Size * 0.135, $Size * 0.135, $Size * 0.73, $Size * 0.73)
+    $innerPath = New-RoundRectPath $inner ($Size * 0.13)
     $graphics.DrawPath($icePen, $innerPath)
 
-    $seamPen = New-Object System.Drawing.Pen $ice2, ([Math]::Max(1, [int]($Size * 0.027)))
-    $ball = [System.Drawing.RectangleF]::new($Size * 0.18, $Size * 0.13, $Size * 0.64, $Size * 0.46)
-    $graphics.DrawArc($seamPen, $ball, 190, 160)
-    $graphics.DrawArc($seamPen, $ball, -10, 160)
-    $graphics.DrawBezier($seamPen, [System.Drawing.PointF]::new($Size*.26,$Size*.20), [System.Drawing.PointF]::new($Size*.38,$Size*.42), [System.Drawing.PointF]::new($Size*.57,$Size*.40), [System.Drawing.PointF]::new($Size*.74,$Size*.20))
+    # Big centered basketball mark. This stays legible in the Windows taskbar.
+    $ballRect = [System.Drawing.RectangleF]::new($Size * 0.20, $Size * 0.18, $Size * 0.60, $Size * 0.44)
+    $ballBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush $ballRect, $ball, $ballDark, 90
+    $graphics.FillEllipse($ballBrush, $ballRect)
+    $seamPen = New-Object System.Drawing.Pen $gold, ([Math]::Max(1, [int]($Size * 0.028)))
+    $graphics.DrawEllipse($seamPen, $ballRect)
+    $graphics.DrawArc($seamPen, $ballRect, 205, 130)
+    $graphics.DrawArc($seamPen, $ballRect, 25, 130)
+    $graphics.DrawLine($seamPen, [int]($Size*.50), [int]($Size*.19), [int]($Size*.50), [int]($Size*.61))
 
-    $bandBrush = New-Object System.Drawing.SolidBrush $darkBand
-    $graphics.FillPath($bandBrush, $bandPath)
-    $graphics.DrawPath($icePen, $bandPath)
-
+    # Strong simple lettering: CH is what must read at small size. Reborn appears only large.
+    $lettersRect = [System.Drawing.RectangleF]::new($Size * 0.13, $Size * 0.51, $Size * 0.74, $Size * 0.27)
     if ($Size -lt 32) {
-        Draw-CenteredText $graphics "CH" $band $white ($Size * 0.30) "Segoe UI"
+        Draw-CenteredText $graphics "CH" $lettersRect $white ($Size * 0.36)
+    } elseif ($Size -lt 96) {
+        Draw-CenteredText $graphics "CH" $lettersRect $white ($Size * 0.34)
+        Draw-CenteredText $graphics "2K" ([System.Drawing.RectangleF]::new($Size*.61,$Size*.55,$Size*.22,$Size*.16)) $gold ($Size * 0.13)
     } else {
-        Draw-CenteredText $graphics "CHRB" ([System.Drawing.RectangleF]::new($Size*.16,$Size*.47,$Size*.48,$Size*.16)) $white ($Size * 0.17) "Segoe UI Black"
-        Draw-CenteredText $graphics "2K" ([System.Drawing.RectangleF]::new($Size*.61,$Size*.47,$Size*.24,$Size*.16)) $gold ($Size * 0.17) "Segoe UI Black"
-        if ($Size -ge 64) { Draw-CenteredText $graphics "REBORN" ([System.Drawing.RectangleF]::new($Size*.18,$Size*.67,$Size*.64,$Size*.11)) $ice2 ($Size * 0.075) "Segoe UI" }
-        if ($Size -ge 96) {
-            Draw-Star $graphics ($Size*.50) ($Size*.84) ($Size*.055) $ice2
-            Draw-Star $graphics ($Size*.37) ($Size*.84) ($Size*.032) $ice
-            Draw-Star $graphics ($Size*.63) ($Size*.84) ($Size*.032) $ice
-        }
+        Draw-CenteredText $graphics "CH" ([System.Drawing.RectangleF]::new($Size*.13,$Size*.49,$Size*.43,$Size*.24)) $white ($Size * 0.26)
+        Draw-CenteredText $graphics "2K" ([System.Drawing.RectangleF]::new($Size*.54,$Size*.50,$Size*.31,$Size*.23)) $gold ($Size * 0.23)
+        Draw-CenteredText $graphics "REBORN" ([System.Drawing.RectangleF]::new($Size*.18,$Size*.75,$Size*.64,$Size*.095)) $ice ($Size * 0.075) "Segoe UI"
     }
 
     $stream = New-Object System.IO.MemoryStream
     $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
     $bytes = $stream.ToArray()
 
-    $seamPen.Dispose(); $bandBrush.Dispose(); $icePen.Dispose(); $goldPen.Dispose(); $navyBrush.Dispose()
-    $bandPath.Dispose(); $innerPath.Dispose(); $outerPath.Dispose()
+    $seamPen.Dispose(); $ballBrush.Dispose(); $icePen.Dispose(); $goldPen.Dispose(); $bgBrush.Dispose()
+    $innerPath.Dispose(); $outerPath.Dispose()
     $graphics.Dispose(); $bitmap.Dispose(); $stream.Dispose()
     return $bytes
 }
 
-$sizes = @(16, 24, 32, 48, 64, 128, 256)
+$sizes = @(16, 20, 24, 32, 40, 48, 64, 128, 256)
 $images = @()
 foreach ($size in $sizes) {
     $images += [PSCustomObject]@{ Size = $size; Bytes = (New-IconPngBytes $size) }
@@ -137,4 +124,4 @@ finally {
     $fs.Dispose()
 }
 
-Write-Host "[ICON] Wrote CHoops Reborn app icon to $OutputPath"
+Write-Host "[ICON] Wrote clean CHoops Reborn taskbar icon to $OutputPath"
