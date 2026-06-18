@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Assets icon">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#061b2f"/><stop offset="1" stop-color="#082f4e"/></linearGradient></defs>
+  <path d="M128 24l92 53v104l-92 51-92-51V77z" fill="url(#bg)" stroke="#f8fdff" stroke-width="9" stroke-linejoin="round"/>
+  <path d="M36 77l92 54 92-54M128 131v101" fill="none" stroke="#60d2ff" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M72 144l34-19v41l-34 19z" fill="#ddecff"/><path d="M152 126h39v49h-39z" fill="#ddecff"/><path d="M160 117h21l9 9h-38z" fill="#ddecff"/>
+  <circle cx="128" cy="74" r="24" fill="none" stroke="#f8fdff" stroke-width="7"/><path d="M128 50v48m-22-24h44" stroke="#60d2ff" stroke-width="5"/>
+</svg>
