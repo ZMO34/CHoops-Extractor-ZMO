@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Conferences icon">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#061b2f"/><stop offset="1" stop-color="#082f4e"/></linearGradient></defs>
+  <path d="M103 28h50l28 28v47l-53 34-53-34V56z" fill="url(#bg)" stroke="#60d2ff" stroke-width="7"/>
+  <path d="M53 139h48l25 26v46l-49 32-49-32v-46zM155 139h48l25 26v46l-49 32-49-32v-46z" fill="#07121f" stroke="#f8fdff" stroke-width="7"/>
+  <path d="M128 137v30m-52-28v-25h104v25" fill="none" stroke="#60d2ff" stroke-width="8" stroke-linecap="round"/>
+  <path d="M128 52l12 25h27l-22 16 8 27-25-16-25 16 8-27-22-16h27z" fill="#f8fdff" opacity=".95"/>
+  <path d="M77 167l8 16h18l-14 10 5 17-17-10-16 10 5-17-14-10h17zm102 0l8 16h18l-14 10 5 17-17-10-16 10 5-17-14-10h17z" fill="#60d2ff"/>
+</svg>
