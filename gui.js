@@ -3,15 +3,40 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
-const ROOT = __dirname;
-const NATIVE_EXE = path.join(ROOT, 'dist-native', 'choops-native-desktop.exe');
-const CLI_EXE = path.join(ROOT, 'dist', 'choops-extractor.exe');
-const NATIVE_PROJECT = path.join(ROOT, 'native-desktop', 'ChoopsModdingSuite', 'ChoopsModdingSuite.csproj');
-const DOTNET_CHECK = path.join(ROOT, 'scripts', 'check-dotnet-sdk.js');
+const IS_PACKAGED_LAUNCHER = Boolean(process.pkg);
+const LAUNCHER_DIR = IS_PACKAGED_LAUNCHER ? path.dirname(process.execPath) : __dirname;
+const PROJECT_ROOT = IS_PACKAGED_LAUNCHER && path.basename(LAUNCHER_DIR).toLowerCase() === 'dist'
+    ? path.dirname(LAUNCHER_DIR)
+    : LAUNCHER_DIR;
+
+const NATIVE_PROJECT = path.join(PROJECT_ROOT, 'native-desktop', 'ChoopsModdingSuite', 'ChoopsModdingSuite.csproj');
+const DOTNET_CHECK = path.join(PROJECT_ROOT, 'scripts', 'check-dotnet-sdk.js');
+const CLI_EXE = path.join(PROJECT_ROOT, 'dist', 'choops-extractor.exe');
+
+function existingPath(candidates) {
+    for (const candidate of candidates) {
+        const full = path.resolve(candidate);
+        if (fs.existsSync(full)) return full;
+    }
+    return null;
+}
+
+function nativeExePath() {
+    return existingPath([
+        path.join(PROJECT_ROOT, 'dist-native', 'choops-native-desktop.exe'),
+        path.join(PROJECT_ROOT, 'dist-native', 'CHoopsModdingSuite.exe'),
+        path.join(LAUNCHER_DIR, '..', 'dist-native', 'choops-native-desktop.exe'),
+        path.join(LAUNCHER_DIR, '..', 'dist-native', 'CHoopsModdingSuite.exe'),
+        path.join(LAUNCHER_DIR, 'choops-native-desktop.exe'),
+        path.join(LAUNCHER_DIR, 'CHoopsModdingSuite.exe'),
+        path.join(process.cwd(), 'dist-native', 'choops-native-desktop.exe'),
+        path.join(process.cwd(), 'dist-native', 'CHoopsModdingSuite.exe')
+    ]);
+}
 
 function runChecked(command, args, label) {
     console.log(`[GUI] ${label}...`);
-    const result = spawnSync(command, args, { cwd: ROOT, stdio: 'inherit', shell: false });
+    const result = spawnSync(command, args, { cwd: PROJECT_ROOT, stdio: 'inherit', shell: false });
     if (result.error) {
         console.error(`[GUI] Failed to ${label}: ${result.error.message}`);
         process.exit(1);
@@ -23,7 +48,13 @@ function runChecked(command, args, label) {
 }
 
 function launchProcess(command, args, options = {}) {
-    const child = spawn(command, args, { cwd: ROOT, stdio: options.stdio || 'inherit', shell: false, detached: Boolean(options.detached) });
+    const child = spawn(command, args, {
+        cwd: PROJECT_ROOT,
+        stdio: options.stdio || 'inherit',
+        shell: false,
+        detached: Boolean(options.detached),
+        windowsHide: Boolean(options.detached)
+    });
     child.on('error', (error) => {
         console.error(`[GUI] Failed to launch native desktop app: ${error.message}`);
         process.exit(1);
@@ -37,11 +68,22 @@ function launchProcess(command, args, options = {}) {
 
 function main() {
     console.log('[GUI] Launching CHoops native desktop app. This launcher does not open Chrome, a browser, Electron, or a webview.');
+    console.log(`[GUI] Launcher dir: ${LAUNCHER_DIR}`);
+    console.log(`[GUI] Project root: ${PROJECT_ROOT}`);
 
-    if (fs.existsSync(NATIVE_EXE)) {
-        console.log(`[GUI] Found packaged native app: ${NATIVE_EXE}`);
-        launchProcess(NATIVE_EXE, [], { detached: true, stdio: 'ignore' });
+    const nativeExe = nativeExePath();
+    if (nativeExe) {
+        console.log(`[GUI] Found packaged native app: ${nativeExe}`);
+        launchProcess(nativeExe, [], { detached: true, stdio: 'ignore' });
         return;
+    }
+
+    if (IS_PACKAGED_LAUNCHER) {
+        console.error('[GUI] Could not find the packaged native desktop app.');
+        console.error('[GUI] Run `npm run pack`, then launch either:');
+        console.error('      dist-native\\choops-native-desktop.exe');
+        console.error('      dist\\choops-gui.exe');
+        process.exit(1);
     }
 
     if (!fs.existsSync(CLI_EXE)) {
