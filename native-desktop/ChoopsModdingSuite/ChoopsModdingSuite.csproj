@@ -12,11 +12,11 @@
 
   <Target Name="GenerateAppIcon" BeforeTargets="BeforeBuild">
     <MakeDir Directories="Assets" />
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;$b64 = Get-Content '&apos;$(MSBuildProjectDirectory)\Assets\app.ico.b64&apos;' -Raw; [IO.File]::WriteAllBytes('&apos;$(MSBuildProjectDirectory)\Assets\app.ico&apos;', [Convert]::FromBase64String($b64.Trim()))&quot;" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\Assets\generate-app-icon.ps1&quot; -OutputPath &quot;$(MSBuildProjectDirectory)\Assets\app.ico&quot;" />
   </Target>
 
   <ItemGroup>
-    <None Include="Assets\app.ico.b64" />
+    <None Include="Assets\generate-app-icon.ps1" />
     <None Include="Assets\app.ico" Condition="Exists('Assets\app.ico')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
