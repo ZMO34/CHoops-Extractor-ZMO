@@ -59,6 +59,13 @@ internal static class IconRuntimePolish
             try { form.Icon = new Icon(path); return; }
             catch { }
         }
+
+        try
+        {
+            var extracted = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            if (extracted != null) form.Icon = extracted;
+        }
+        catch { }
     }
 
     private static void RepairLayout(Control root)
