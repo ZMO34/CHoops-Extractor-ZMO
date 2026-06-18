@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Save icon">
+  <defs><linearGradient id="gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f8d575"/><stop offset="1" stop-color="#b87900"/></linearGradient></defs>
+  <rect x="43" y="30" width="170" height="196" rx="18" fill="#061b2f" stroke="url(#gold)" stroke-width="10"/>
+  <rect x="72" y="50" width="86" height="48" rx="6" fill="url(#gold)" stroke="#f8fdff" stroke-width="5"/>
+  <rect x="77" y="136" width="102" height="64" rx="8" fill="#07121f" stroke="#60d2ff" stroke-width="7"/>
+  <path d="M94 157h68m-68 22h48" stroke="#f8fdff" stroke-width="8" stroke-linecap="round"/>
+</svg>
