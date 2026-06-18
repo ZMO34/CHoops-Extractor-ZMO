@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Unknown research icon">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#061b2f"/><stop offset="1" stop-color="#082f4e"/></linearGradient></defs>
+  <path d="M44 35h144l24 24v153H44z" fill="url(#bg)" stroke="#60d2ff" stroke-width="8" stroke-linejoin="round"/>
+  <circle cx="144" cy="128" r="45" fill="#07121f" stroke="#f8fdff" stroke-width="10"/>
+  <path d="M174 162l42 42" stroke="#f8fdff" stroke-width="14" stroke-linecap="round"/>
+  <text x="144" y="146" text-anchor="middle" font-family="Segoe UI Black, Arial" font-size="58" fill="#60d2ff">?</text>
+  <path d="M68 82h43m-43 31h31m-31 63h46m-46-22h32" stroke="#ddecff" stroke-width="8" stroke-linecap="round"/>
+  <path d="M68 136h16v32H68zm25-18h16v50H93zm25 29h16v21h-16z" fill="#60d2ff"/>
+</svg>
