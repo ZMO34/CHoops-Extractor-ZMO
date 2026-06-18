@@ -30,6 +30,15 @@ test_output/
 IFFs/
 TECHNICAL_ANALYSIS.md
 
+# Generated package/release output folders
+release/
+dist/
+dist-native/
+
+# Generated native build intermediates
+native-desktop/**/bin/
+native-desktop/**/obj/
+
 # Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
 .grunt
 
@@ -39,7 +48,7 @@ bower_components
 # node-waf configuration
 .lock-wscript
 
-# Compiled binary addons (https://nodejs.org/api/addons.html)
+# Compiled binary addons (https://nodejs.org/api/addons)
 build/Release
 
 # Dependency directories
@@ -79,44 +88,3 @@ typings/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
-
-# Next.js build output
-.next
-
-# Nuxt.js build / generate output
-.nuxt
-
-# Project build outputs. Keep generated EXEs out of GitHub.
-release/
-dist/
-dist-native/
-
-# Gatsby files
-.cache/
-# Comment in the public line in if your project uses Gatsby and not Next.js
-# https://nextjs.org/blog/next-9-1#public-directory-support
-# public
-
-# vuepress build output
-.vuepress/dist
-
-# Serverless directories
-.serverless/
-
-# FuseBox cache
-.fusebox/
-
-# DynamoDB Local files
-.dynamodb/
-
-# TernJS port file
-.tern-port
-
-# Stores VSCode versions used for testing VSCode extensions
-.vscode-test
-
-# New Stuff
-TECHNICAL_ANALYSIS.md
-IFFs/
-
-script/
