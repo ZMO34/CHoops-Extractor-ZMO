@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Folder browse icon">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#061b2f"/><stop offset="1" stop-color="#082f4e"/></linearGradient></defs>
+  <path d="M25 74h76l23 24h107v111H25z" fill="url(#bg)" stroke="#f8fdff" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M25 99h206" stroke="#60d2ff" stroke-width="8"/>
+  <path d="M64 139h128m-128 33h95" stroke="#ddecff" stroke-width="9" stroke-linecap="round"/>
+</svg>
