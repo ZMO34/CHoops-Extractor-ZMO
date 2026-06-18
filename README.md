@@ -9,14 +9,17 @@ npm install
 npm run pack
 ```
 
-Outputs:
+Output:
 
 ```text
-dist\choops-extractor.exe          command-line backend
-dist-native\choops-native-desktop.exe native desktop app
+release\choops-native-desktop.exe   native desktop app
+release\choops-gui.exe              native app launcher
+release\choops-extractor.exe        command-line backend
+release\gtf2dds.exe                 bundled texture helper
+release\dds2gtf.exe                 bundled texture helper
 ```
 
-The native app keeps the heavy work in `choops-extractor.exe`, so every workflow remains scriptable, logged, and debuggable while the user-facing app stays local/native.
+There is intentionally one user-facing build folder: `release`. Older `dist` and `dist-native` folders were retired because they made the build output look duplicated. The native app keeps the heavy work in `choops-extractor.exe`, so every workflow remains scriptable, logged, and debuggable while the user-facing app stays local/native.
 
 ### Native desktop app
 
@@ -32,10 +35,16 @@ For release packaging:
 npm run pack
 ```
 
-Then run:
+Then run either:
 
 ```bat
-dist-native\choops-native-desktop.exe
+release\choops-native-desktop.exe
+```
+
+or:
+
+```bat
+release\choops-gui.exe
 ```
 
 The native app includes:
@@ -62,17 +71,17 @@ The native app includes:
 The recommended build path no longer modifies your vanilla extracted game folder.
 
 ```bat
-dist\choops-extractor.exe build-copy <vanilla-game-or-USRDIR> <mod-folder> <output-modded-copy> --game-name choops2k8
+release\choops-extractor.exe build-copy <vanilla-game-or-USRDIR> <mod-folder> <output-modded-copy> --game-name choops2k8
 ```
 
 Examples:
 
 ```bat
-dist\choops-extractor.exe build-copy "D:\Games\CH2K8\PS3_GAME" "D:\Mods\MyRip" "D:\Games\CH2K8_MODDED\PS3_GAME" --game-name choops2k8
+release\choops-extractor.exe build-copy "D:\Games\CH2K8\PS3_GAME" "D:\Mods\MyRip" "D:\Games\CH2K8_MODDED\PS3_GAME" --game-name choops2k8
 ```
 
 ```bat
-dist\choops-extractor.exe build-copy "D:\Games\CH2K8\PS3_GAME\USRDIR" "D:\Mods\MyRip" "D:\Games\CH2K8_MODDED\USRDIR" --game-name choops2k8
+release\choops-extractor.exe build-copy "D:\Games\CH2K8\PS3_GAME\USRDIR" "D:\Mods\MyRip" "D:\Games\CH2K8_MODDED\USRDIR" --game-name choops2k8
 ```
 
 `build-copy` copies the vanilla folder to a new output folder first, then applies the mod only to the copied game. It writes:
@@ -86,7 +95,7 @@ inside the copied output folder.
 If the output folder already exists:
 
 ```bat
-dist\choops-extractor.exe build-copy <vanilla> <mod> <output> --overwrite
+release\choops-extractor.exe build-copy <vanilla> <mod> <output> --overwrite
 ```
 
 ### CLI usage
@@ -94,37 +103,37 @@ dist\choops-extractor.exe build-copy <vanilla> <mod> <output> --overwrite
 The CLI remains the safest automation/debug path:
 
 ```bat
-dist\choops-extractor.exe rip <path-to-PS3_GAME\USRDIR> <output-folder> --build-cache --game-name choops2k8
+release\choops-extractor.exe rip <path-to-PS3_GAME\USRDIR> <output-folder> --build-cache --game-name choops2k8
 ```
 
 List supported game profiles:
 
 ```bat
-dist\choops-extractor.exe profiles
+release\choops-extractor.exe profiles
 ```
 
 Build only the dynamic cache:
 
 ```bat
-dist\choops-extractor.exe build-cache <path-to-PS3_GAME\USRDIR> --game-name choops2k8
+release\choops-extractor.exe build-cache <path-to-PS3_GAME\USRDIR> --game-name choops2k8
 ```
 
 Decode a roster source:
 
 ```bat
-dist\choops-extractor.exe roster-decode <roster_english.iff-or-USERDATA-or-save.zip> <output-folder>
+release\choops-extractor.exe roster-decode <roster_english.iff-or-USERDATA-or-save.zip> <output-folder>
 ```
 
 Compare two roster sources:
 
 ```bat
-dist\choops-extractor.exe roster-compare <base-roster> <custom-roster> <output-folder>
+release\choops-extractor.exe roster-compare <base-roster> <custom-roster> <output-folder>
 ```
 
 Advanced in-place build still exists, but use it only on a disposable copy:
 
 ```bat
-dist\choops-extractor.exe build <path-to-copied-PS3_GAME\USRDIR> <mod-folder> --game-name choops2k8
+release\choops-extractor.exe build <path-to-copied-PS3_GAME\USRDIR> <mod-folder> --game-name choops2k8
 ```
 
 ### Preservation rules
