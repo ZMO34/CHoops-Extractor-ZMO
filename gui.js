@@ -5,13 +5,13 @@ const { spawn, spawnSync } = require('child_process');
 
 const IS_PACKAGED_LAUNCHER = Boolean(process.pkg);
 const LAUNCHER_DIR = IS_PACKAGED_LAUNCHER ? path.dirname(process.execPath) : __dirname;
-const PROJECT_ROOT = IS_PACKAGED_LAUNCHER && path.basename(LAUNCHER_DIR).toLowerCase() === 'dist'
+const PROJECT_ROOT = IS_PACKAGED_LAUNCHER && path.basename(LAUNCHER_DIR).toLowerCase() === 'release'
     ? path.dirname(LAUNCHER_DIR)
     : LAUNCHER_DIR;
 
 const NATIVE_PROJECT = path.join(PROJECT_ROOT, 'native-desktop', 'ChoopsModdingSuite', 'ChoopsModdingSuite.csproj');
 const DOTNET_CHECK = path.join(PROJECT_ROOT, 'scripts', 'check-dotnet-sdk.js');
-const CLI_EXE = path.join(PROJECT_ROOT, 'dist', 'choops-extractor.exe');
+const CLI_EXE = path.join(PROJECT_ROOT, 'release', 'choops-extractor.exe');
 
 function existingPath(candidates) {
     for (const candidate of candidates) {
@@ -23,14 +23,12 @@ function existingPath(candidates) {
 
 function nativeExePath() {
     return existingPath([
-        path.join(PROJECT_ROOT, 'dist-native', 'choops-native-desktop.exe'),
-        path.join(PROJECT_ROOT, 'dist-native', 'CHoopsModdingSuite.exe'),
-        path.join(LAUNCHER_DIR, '..', 'dist-native', 'choops-native-desktop.exe'),
-        path.join(LAUNCHER_DIR, '..', 'dist-native', 'CHoopsModdingSuite.exe'),
         path.join(LAUNCHER_DIR, 'choops-native-desktop.exe'),
         path.join(LAUNCHER_DIR, 'CHoopsModdingSuite.exe'),
-        path.join(process.cwd(), 'dist-native', 'choops-native-desktop.exe'),
-        path.join(process.cwd(), 'dist-native', 'CHoopsModdingSuite.exe')
+        path.join(PROJECT_ROOT, 'release', 'choops-native-desktop.exe'),
+        path.join(PROJECT_ROOT, 'release', 'CHoopsModdingSuite.exe'),
+        path.join(process.cwd(), 'release', 'choops-native-desktop.exe'),
+        path.join(process.cwd(), 'release', 'CHoopsModdingSuite.exe')
     ]);
 }
 
@@ -79,10 +77,10 @@ function main() {
     }
 
     if (IS_PACKAGED_LAUNCHER) {
-        console.error('[GUI] Could not find the packaged native desktop app.');
+        console.error('[GUI] Could not find the packaged native desktop app in the release folder.');
         console.error('[GUI] Run `npm run pack`, then launch either:');
-        console.error('      dist-native\\choops-native-desktop.exe');
-        console.error('      dist\\choops-gui.exe');
+        console.error('      release\\choops-native-desktop.exe');
+        console.error('      release\\choops-gui.exe');
         process.exit(1);
     }
 
