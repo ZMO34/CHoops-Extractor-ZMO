@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Dashboard icon">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#061b2f"/><stop offset="1" stop-color="#082f4e"/></linearGradient><linearGradient id="ice" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f8fdff"/><stop offset="1" stop-color="#60d2ff"/></linearGradient></defs>
+  <path d="M40 52l88-32 88 32v126l-88 58-88-58z" fill="url(#bg)" stroke="#60d2ff" stroke-width="8"/>
+  <rect x="56" y="70" width="66" height="56" rx="9" fill="#07121f" stroke="#f8fdff" stroke-width="5"/>
+  <rect x="72" y="101" width="10" height="17" fill="#60d2ff"/><rect x="88" y="88" width="10" height="30" fill="#60d2ff"/><rect x="104" y="77" width="10" height="41" fill="#60d2ff"/>
+  <rect x="138" y="70" width="62" height="56" rx="9" fill="#07121f" stroke="#f8fdff" stroke-width="5"/>
+  <path d="M170 86a22 22 0 1 1-16 37" fill="none" stroke="url(#ice)" stroke-width="13"/>
+  <rect x="56" y="146" width="144" height="48" rx="10" fill="#07121f" stroke="#f8fdff" stroke-width="5"/>
+  <path d="M74 174h34m-34-15h48m38 19l23-22 19 15" stroke="#60d2ff" stroke-width="7" stroke-linecap="round" fill="none"/>
+</svg>
