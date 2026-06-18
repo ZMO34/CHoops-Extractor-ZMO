@@ -7,10 +7,20 @@
     <Nullable>enable</Nullable>
     <AssemblyName>choops-native-desktop</AssemblyName>
     <RootNamespace>ChoopsModdingSuite</RootNamespace>
-    <ApplicationIcon />
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
+  <Target Name="GenerateAppIcon" BeforeTargets="BeforeBuild">
+    <MakeDir Directories="Assets" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;$b64 = Get-Content '&apos;$(MSBuildProjectDirectory)\Assets\app.ico.b64&apos;' -Raw; [IO.File]::WriteAllBytes('&apos;$(MSBuildProjectDirectory)\Assets\app.ico&apos;', [Convert]::FromBase64String($b64.Trim()))&quot;" />
+  </Target>
+
   <ItemGroup>
+    <None Include="Assets\app.ico.b64" />
+    <None Include="Assets\app.ico" Condition="Exists('Assets\app.ico')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
     <None Include="..\..\dist\choops-extractor.exe" Link="choops-extractor.exe" Condition="Exists('..\..\dist\choops-extractor.exe')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
