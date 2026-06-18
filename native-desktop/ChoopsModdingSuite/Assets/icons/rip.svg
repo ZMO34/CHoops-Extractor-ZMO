@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Rip workflow icon">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#061b2f"/><stop offset="1" stop-color="#082f4e"/></linearGradient></defs>
+  <rect x="34" y="34" width="188" height="188" rx="28" fill="url(#bg)" stroke="#60d2ff" stroke-width="8"/>
+  <path d="M63 88h52l18 18h60v42H63z" fill="#07121f" stroke="#f8fdff" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M69 175h110" stroke="#60d2ff" stroke-width="11" stroke-linecap="round"/>
+  <path d="M151 150l31 25-31 25" fill="none" stroke="#f8fdff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
