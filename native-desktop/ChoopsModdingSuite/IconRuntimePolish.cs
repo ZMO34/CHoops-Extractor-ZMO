@@ -9,11 +9,9 @@ using System.Windows.Forms;
 namespace ChoopsModdingSuite;
 
 /// <summary>
-/// Applies the CHoops Reborn mockup visual language to the native WinForms shell without
-/// requiring browser/webview assets.  The icon artwork is drawn procedurally from the same
-/// navy / ice-blue / white / gold palette used by the mockup and by the SVG sources under
-/// Assets/icons.  Keeping this as an automatic polish layer lets the existing editor rebuild
-/// tab contents while still receiving the full icon treatment.
+/// Applies the College Hoops Reborn mockup icon treatment to the native WinForms UI.
+/// This class intentionally uses only stock WinForms/GDI+ APIs so the native EXE can
+/// build on clean .NET SDK installs without extra browser/webview dependencies.
 /// </summary>
 internal static class IconRuntimePolish
 {
@@ -22,7 +20,6 @@ internal static class IconRuntimePolish
     private static readonly Dictionary<string, Icon> IconCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<IntPtr> IconizedForms = new();
 
-    private static readonly Color Transparent = Color.Transparent;
     private static readonly Color Navy0 = Color.FromArgb(7, 14, 23);
     private static readonly Color Navy1 = Color.FromArgb(6, 27, 47);
     private static readonly Color Navy2 = Color.FromArgb(8, 47, 78);
@@ -31,7 +28,6 @@ internal static class IconRuntimePolish
     private static readonly Color White = Color.FromArgb(248, 253, 255);
     private static readonly Color Silver = Color.FromArgb(185, 207, 225);
     private static readonly Color Gold = Color.FromArgb(221, 163, 36);
-    private static readonly Color GoldDark = Color.FromArgb(126, 86, 18);
     private static readonly Color Green = Color.FromArgb(42, 188, 90);
 
     [ModuleInitializer]
@@ -53,7 +49,7 @@ internal static class IconRuntimePolish
         }
         catch
         {
-            // Cosmetic layer only. The editor must never fail to open because an icon pass failed.
+            // Cosmetic layer only. The editor must never fail because an icon pass failed.
         }
     }
 
@@ -79,8 +75,7 @@ internal static class IconRuntimePolish
 
     private static void PolishButton(Button button)
     {
-        var rawText = button.Text ?? string.Empty;
-        var cleanText = CleanText(rawText);
+        var cleanText = CleanText(button.Text ?? string.Empty);
         var iconKey = IconKeyForText(cleanText);
         if (iconKey == null) return;
 
@@ -113,12 +108,11 @@ internal static class IconRuntimePolish
         var applied = AppliedPrefix + "label:" + cleanText;
         if (label.AccessibleDescription == applied) return;
 
-        label.Text = cleanText;
+        label.Text = "    " + cleanText;
         label.Image = GetBitmap(iconKey, cleanText.Length > 24 ? 18 : 22);
         label.ImageAlign = ContentAlignment.MiddleLeft;
         label.TextAlign = ContentAlignment.MiddleLeft;
-        label.TextImageRelation = TextImageRelation.ImageBeforeText;
-        label.Padding = new Padding(3, 0, 0, 0);
+        label.Padding = new Padding(2, 0, 0, 0);
         label.AccessibleDescription = applied;
     }
 
@@ -182,29 +176,29 @@ internal static class IconRuntimePolish
         if (BitmapCache.TryGetValue(cacheKey, out var cached)) return cached;
 
         var bitmap = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        using var graphics = Graphics.FromImage(bitmap);
-        graphics.Clear(Transparent);
-        graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        using var g = Graphics.FromImage(bitmap);
+        g.Clear(Color.Transparent);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
         switch (key.ToLowerInvariant())
         {
-            case "app": DrawAppBrand(graphics, size); break;
-            case "dashboard": DrawDashboard(graphics, size); break;
-            case "school": DrawSchool(graphics, size); break;
-            case "spirit": DrawMegaphone(graphics, size); break;
-            case "colors": DrawColors(graphics, size); break;
-            case "roster": DrawRoster(graphics, size); break;
-            case "rotation": DrawRotation(graphics, size); break;
-            case "assets": DrawAssets(graphics, size); break;
-            case "conferences": DrawConferences(graphics, size); break;
-            case "research": DrawResearch(graphics, size); break;
-            case "folder": DrawFolder(graphics, size); break;
-            case "save": DrawSave(graphics, size); break;
-            case "build": DrawBuild(graphics, size); break;
-            case "rip": DrawRip(graphics, size); break;
-            case "cache": DrawCache(graphics, size); break;
-            default: DrawDashboard(graphics, size); break;
+            case "app": DrawAppBrand(g, size); break;
+            case "dashboard": DrawDashboard(g, size); break;
+            case "school": DrawSchool(g, size); break;
+            case "spirit": DrawMegaphone(g, size); break;
+            case "colors": DrawColors(g, size); break;
+            case "roster": DrawRoster(g, size); break;
+            case "rotation": DrawRotation(g, size); break;
+            case "assets": DrawAssets(g, size); break;
+            case "conferences": DrawConferences(g, size); break;
+            case "research": DrawResearch(g, size); break;
+            case "folder": DrawFolder(g, size); break;
+            case "save": DrawSave(g, size); break;
+            case "build": DrawBuild(g, size); break;
+            case "rip": DrawRip(g, size); break;
+            case "cache": DrawCache(g, size); break;
+            default: DrawDashboard(g, size); break;
         }
 
         BitmapCache[cacheKey] = bitmap;
@@ -222,46 +216,37 @@ internal static class IconRuntimePolish
 
     private static void DrawAppBrand(Graphics g, int s)
     {
-        var r = Rect(s, .06f, .06f, .88f, .88f);
+        var r = Rect(s, .07f, .07f, .86f, .86f);
         FillRound(g, r, s * .14f, Navy0, Navy2);
-        StrokeRound(g, r, s * .14f, Gold, Math.Max(2, s * .035f));
-        StrokeRound(g, Shrink(r, s * .07f), s * .10f, Ice, Math.Max(2, s * .022f));
+        StrokeRound(g, r, s * .14f, Gold, Math.Max(2, s * .034f));
+        StrokeRound(g, Shrink(r, s * .07f), s * .10f, Ice, Math.Max(2, s * .020f));
 
-        using var seamPen = new Pen(Ice2, Math.Max(1, s * .028f));
-        var ball = Rect(s, .18f, .13f, .64f, .46f);
+        using var seamPen = new Pen(Ice2, Math.Max(1, s * .027f));
+        var ball = Rect(s, .19f, .13f, .62f, .43f);
         g.DrawArc(seamPen, ball, 190, 160);
         g.DrawArc(seamPen, ball, -10, 160);
-        g.DrawBezier(seamPen, new PointF(s * .26f, s * .20f), new PointF(s * .38f, s * .42f), new PointF(s * .57f, s * .40f), new PointF(s * .74f, s * .20f));
+        g.DrawBezier(seamPen, new PointF(s * .27f, s * .20f), new PointF(s * .38f, s * .42f), new PointF(s * .58f, s * .40f), new PointF(s * .73f, s * .20f));
 
-        var band = Rect(s, .12f, .45f, .76f, .24f);
+        var band = Rect(s, .13f, .45f, .74f, .24f);
         FillRound(g, band, s * .06f, Color.FromArgb(235, 3, 18, 31), Color.FromArgb(235, 5, 48, 82));
         StrokeRound(g, band, s * .06f, Ice, Math.Max(1, s * .016f));
-
         DrawCenteredText(g, "CHRB", Rect(s, .16f, .47f, .48f, .16f), White, "Segoe UI Black", s * .17f, FontStyle.Bold);
-        DrawCenteredText(g, "2K", Rect(s, .61f, .47f, .24f, .16f), Gold, "Segoe UI Black", s * .17f, FontStyle.Bold);
+        DrawCenteredText(g, "2K", Rect(s, .61f, .47f, .23f, .16f), Gold, "Segoe UI Black", s * .17f, FontStyle.Bold);
         if (s >= 64) DrawCenteredText(g, "REBORN", Rect(s, .18f, .67f, .64f, .11f), Ice2, "Segoe UI", s * .075f, FontStyle.Bold);
-        if (s >= 96)
-        {
-            DrawStar(g, new PointF(s * .50f, s * .84f), s * .055f, Ice2);
-            DrawStar(g, new PointF(s * .37f, s * .84f), s * .032f, Ice);
-            DrawStar(g, new PointF(s * .63f, s * .84f), s * .032f, Ice);
-        }
     }
 
     private static void DrawDashboard(Graphics g, int s)
     {
         DrawShield(g, s);
         using var p = new Pen(Ice2, Math.Max(1, s * .035f));
-        using var brush = new SolidBrush(Ice);
-        var inset = Rect(s, .22f, .25f, .24f, .32f);
+        using var b = new SolidBrush(Ice);
         for (var i = 0; i < 4; i++)
         {
             var h = s * (.10f + i * .055f);
-            g.FillRectangle(brush, inset.X + i * s * .07f, inset.Bottom - h, s * .045f, h);
+            g.FillRectangle(b, s * (.24f + i * .075f), s * .64f - h, s * .048f, h);
         }
         g.DrawArc(p, Rect(s, .58f, .26f, .24f, .24f), 20, 290);
-        g.DrawLines(p, new[] { new PointF(s * .22f, s * .72f), new PointF(s * .36f, s * .62f), new PointF(s * .52f, s * .69f), new PointF(s * .75f, s * .52f) });
-        foreach (var pt in new[] { new PointF(s * .22f, s * .72f), new PointF(s * .36f, s * .62f), new PointF(s * .52f, s * .69f), new PointF(s * .75f, s * .52f) }) g.FillEllipse(brush, pt.X - s * .025f, pt.Y - s * .025f, s * .05f, s * .05f);
+        g.DrawLines(p, new[] { new PointF(s * .23f, s * .74f), new PointF(s * .38f, s * .63f), new PointF(s * .52f, s * .70f), new PointF(s * .77f, s * .53f) });
     }
 
     private static void DrawSchool(Graphics g, int s)
@@ -276,7 +261,6 @@ internal static class IconRuntimePolish
         g.FillRectangle(dark, Rect(s, .23f, .42f, .54f, .36f));
         for (var i = 0; i < 3; i++) g.FillRectangle(white, Rect(s, .29f + i * .16f, .47f, .075f, .25f));
         g.FillRectangle(white, Rect(s, .21f, .74f, .58f, .05f));
-        g.FillEllipse(white, Rect(s, .44f, .29f, .12f, .12f));
     }
 
     private static void DrawMegaphone(Graphics g, int s)
@@ -285,13 +269,11 @@ internal static class IconRuntimePolish
         using var dark = new SolidBrush(Navy1);
         using var blue = new SolidBrush(Ice);
         using var whitePen = new Pen(White, Math.Max(2, s * .045f));
-        using var icePen = new Pen(Ice, Math.Max(1, s * .02f));
         var horn = new[] { new PointF(s * .22f, s * .54f), new PointF(s * .74f, s * .25f), new PointF(s * .84f, s * .75f) };
         g.FillPolygon(dark, horn);
         g.DrawPolygon(whitePen, horn);
         g.DrawEllipse(whitePen, Rect(s, .70f, .25f, .18f, .50f));
         g.FillRectangle(dark, Rect(s, .15f, .48f, .14f, .14f));
-        g.DrawRectangle(icePen, Rectangle.Round(Rect(s, .15f, .48f, .14f, .14f)));
         g.FillPolygon(blue, new[] { new PointF(s * .34f, s * .47f), new PointF(s * .55f, s * .40f), new PointF(s * .50f, s * .55f), new PointF(s * .34f, s * .58f) });
     }
 
@@ -318,8 +300,8 @@ internal static class IconRuntimePolish
         using var white = new SolidBrush(White);
         using var pen = new Pen(Ice, Math.Max(1, s * .018f));
         DrawPerson(g, s * .50f, s * .34f, s * .18f, white, pen);
-        DrawPerson(g, s * .33f, s * .42f, s * .14f, new SolidBrush(Color.FromArgb(220, White)), pen);
-        DrawPerson(g, s * .67f, s * .42f, s * .14f, new SolidBrush(Color.FromArgb(220, White)), pen);
+        DrawPerson(g, s * .33f, s * .42f, s * .14f, white, pen);
+        DrawPerson(g, s * .67f, s * .42f, s * .14f, white, pen);
         DrawCenteredText(g, "1", Rect(s, .26f, .70f, .14f, .16f), Ice2, "Segoe UI Black", s * .15f, FontStyle.Bold);
         DrawCenteredText(g, "2", Rect(s, .43f, .68f, .16f, .18f), White, "Segoe UI Black", s * .18f, FontStyle.Bold);
         DrawCenteredText(g, "3", Rect(s, .62f, .70f, .14f, .16f), Ice2, "Segoe UI Black", s * .15f, FontStyle.Bold);
@@ -383,10 +365,7 @@ internal static class IconRuntimePolish
         DrawCenteredText(g, "?", Rect(s, .46f, .40f, .20f, .22f), Ice2, "Segoe UI Black", s * .18f, FontStyle.Bold);
     }
 
-    private static void DrawFolder(Graphics g, int s)
-    {
-        DrawFolderShape(g, Rect(s, .16f, .28f, .68f, .44f));
-    }
+    private static void DrawFolder(Graphics g, int s) => DrawFolderShape(g, Rect(s, .16f, .28f, .68f, .44f));
 
     private static void DrawSave(Graphics g, int s)
     {
@@ -394,7 +373,8 @@ internal static class IconRuntimePolish
         using var p = new Pen(White, Math.Max(2, s * .04f));
         using var b = new SolidBrush(Gold);
         var body = Rect(s, .25f, .20f, .50f, .58f);
-        g.FillRectangle(new SolidBrush(Navy1), body);
+        using var bodyBrush = new SolidBrush(Navy1);
+        g.FillRectangle(bodyBrush, body);
         g.DrawRectangle(p, Rectangle.Round(body));
         g.FillRectangle(b, Rect(s, .34f, .24f, .30f, .16f));
         g.DrawRectangle(p, Rectangle.Round(Rect(s, .34f, .55f, .30f, .18f)));
@@ -467,7 +447,7 @@ internal static class IconRuntimePolish
     {
         using var fill = new LinearGradientBrush(r, Navy1, Navy2, 90f);
         using var pen = new Pen(White, Math.Max(1, r.Width * .07f));
-        var path = new GraphicsPath();
+        using var path = new GraphicsPath();
         path.AddLine(r.Left, r.Top + r.Height * .25f, r.Left + r.Width * .30f, r.Top + r.Height * .25f);
         path.AddLine(r.Left + r.Width * .37f, r.Top, r.Left + r.Width * .57f, r.Top);
         path.AddLine(r.Left + r.Width * .66f, r.Top + r.Height * .25f, r.Right, r.Top + r.Height * .25f);
@@ -475,7 +455,6 @@ internal static class IconRuntimePolish
         path.CloseFigure();
         g.FillPath(fill, path);
         g.DrawPath(pen, path);
-        path.Dispose();
     }
 
     private static void DrawBasketballMini(Graphics g, RectangleF r)
