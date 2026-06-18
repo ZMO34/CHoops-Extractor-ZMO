@@ -25,6 +25,8 @@ const TEAM_ROW = 704;
 const COACH_START = 0x0023F78C;
 const COACH_COUNT = 1373;
 const COACH_ROW = 44;
+const TEAM_PALETTE_START = 0x1A0;
+const TEAM_PALETTE_COUNT = 31;
 
 const POSITIONS = {
     0: 'PG',
@@ -34,32 +36,23 @@ const POSITIONS = {
     4: 'C'
 };
 
-function u8(buffer, offset) {
-    return buffer[offset];
-}
-
-function u16(buffer, offset) {
-    return buffer.readUInt16BE(offset);
-}
-
-function u32(buffer, offset) {
-    return buffer.readUInt32BE(offset);
-}
-
-function s32(buffer, offset) {
-    return buffer.readInt32BE(offset);
-}
+function u8(buffer, offset) { return buffer[offset]; }
+function u16(buffer, offset) { return buffer.readUInt16BE(offset); }
+function u32(buffer, offset) { return buffer.readUInt32BE(offset); }
+function s32(buffer, offset) { return buffer.readInt32BE(offset); }
 
 function hex32(value) {
     return `0x${Number(value >>> 0).toString(16).padStart(8, '0').toUpperCase()}`;
 }
 
+function hex8(value) {
+    return Number(value >>> 0).toString(16).padStart(8, '0').toUpperCase();
+}
+
 function csvEscape(value) {
     if (value === null || value === undefined) return '';
     const str = String(value);
-    if (/[",\n\r]/.test(str)) {
-        return `"${str.replace(/"/g, '""')}"`;
-    }
+    if (/[",\n\r]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
     return str;
 }
 
@@ -69,22 +62,16 @@ async function writeCsv(filePath, rows) {
         await fs.writeFile(filePath, '');
         return;
     }
-
     const headers = Object.keys(rows[0]);
     const lines = [headers.map(csvEscape).join(',')];
-    for (const row of rows) {
-        lines.push(headers.map((header) => csvEscape(row[header])).join(','));
-    }
-
+    for (const row of rows) lines.push(headers.map((header) => csvEscape(row[header])).join(','));
     await fs.writeFile(filePath, lines.join('\n'));
 }
 
 function readUtf16LeNull(buffer, offset, maxChars = 256) {
     if (offset < 0 || offset >= buffer.length - 1) return null;
-
     const chars = [];
     let cursor = offset;
-
     for (let i = 0; i < maxChars; i++) {
         if (cursor + 1 >= buffer.length) return null;
         const code = buffer[cursor] | (buffer[cursor + 1] << 8);
@@ -93,7 +80,6 @@ function readUtf16LeNull(buffer, offset, maxChars = 256) {
         chars.push(String.fromCharCode(code));
         cursor += 2;
     }
-
     return chars.join('');
 }
 
@@ -105,15 +91,11 @@ function relativeString(buffer, fieldOffset) {
 
 function indexFromRelativePointer(buffer, fieldOffset, tableStart, rowSize, count) {
     if (fieldOffset < 0 || fieldOffset + 4 > buffer.length) return null;
-
     const value = s32(buffer, fieldOffset);
     if (value === 0 || value === -1) return null;
-
     const target = fieldOffset + value;
     const tableEnd = tableStart + (rowSize * count);
-
     if (target < tableStart || target >= tableEnd) return null;
-
     return Math.floor((target - tableStart) / rowSize);
 }
 
@@ -123,7 +105,6 @@ function decodePlayer(buffer, index) {
     const firstName = relativeString(buffer, offset + 0x14) || '';
     const lastName = relativeString(buffer, offset + 0x10) || '';
     const positionCode = u8(buffer, offset + 0x3B);
-
     return {
         player_index: index,
         row_offset: hex32(offset),
@@ -141,7 +122,6 @@ function decodePlayer(buffer, index) {
 
 function decodeArena(buffer, index) {
     const offset = ARENA_START + (index * ARENA_ROW);
-
     return {
         arena_index: index,
         row_offset: hex32(offset),
@@ -152,7 +132,6 @@ function decodeArena(buffer, index) {
 
 function decodeCoach(buffer, index) {
     const offset = COACH_START + (index * COACH_ROW);
-
     return {
         coach_index: index,
         row_offset: hex32(offset),
@@ -161,18 +140,28 @@ function decodeCoach(buffer, index) {
     };
 }
 
+function decodeTeamPalette(buffer, teamOffset) {
+    const palette = {};
+    for (let i = 0; i < TEAM_PALETTE_COUNT; i++) {
+        const relOffset = TEAM_PALETTE_START + (i * 4);
+        const value = u32(buffer, teamOffset + relOffset);
+        const key = String(i).padStart(2, '0');
+        palette[`palette_${key}_offset`] = `+0x${relOffset.toString(16).toUpperCase()}`;
+        palette[`palette_${key}_hex`] = hex8(value);
+    }
+    return palette;
+}
+
 function decodeTeam(buffer, index) {
     const offset = TEAM_START + (index * TEAM_ROW);
     const assetWord = u32(buffer, offset + 0x18C);
     const assetWord190 = u32(buffer, offset + 0x190);
     const assetWord194 = u32(buffer, offset + 0x194);
-
     const rosterSlots = [];
     for (let slot = 0; slot < 16; slot++) {
         const fieldOffset = offset + 0x6C + (slot * 4);
         rosterSlots.push(indexFromRelativePointer(buffer, fieldOffset, PLAYER_START, PLAYER_ROW, PLAYER_COUNT));
     }
-
     return {
         team_index: index,
         row_offset: hex32(offset),
@@ -196,6 +185,7 @@ function decodeTeam(buffer, index) {
         asset_id_repeat_194: (assetWord194 >>> 16) & 0xFFFF,
         student_section: relativeString(buffer, offset + 0x198) || '',
         event_name: relativeString(buffer, offset + 0x19C) || '',
+        ...decodeTeamPalette(buffer, offset),
         roster_slots: rosterSlots
     };
 }
@@ -206,15 +196,12 @@ function decodeRosterPayload(buffer) {
     const arenas = [];
     const coaches = [];
     const rosterSlots = [];
-
     for (let i = 0; i < PLAYER_COUNT; i++) players.push(decodePlayer(buffer, i));
     for (let i = 0; i < ARENA_COUNT; i++) arenas.push(decodeArena(buffer, i));
     for (let i = 0; i < COACH_COUNT; i++) coaches.push(decodeCoach(buffer, i));
-
     for (let i = 0; i < TEAM_COUNT; i++) {
         const team = decodeTeam(buffer, i);
         teams.push({ ...team, roster_slots: undefined });
-
         team.roster_slots.forEach((playerIndex, slotIndex) => {
             const player = playerIndex === null || playerIndex === undefined ? null : players[playerIndex];
             rosterSlots.push({
@@ -230,36 +217,21 @@ function decodeRosterPayload(buffer) {
             });
         });
     }
-
-    return {
-        payload_size: buffer.length,
-        players,
-        teams,
-        arenas,
-        coaches,
-        rosterSlots
-    };
+    return { payload_size: buffer.length, players, teams, arenas, coaches, rosterSlots };
 }
 
 function extractUserdataFromZip(buffer) {
     let eocdOffset = -1;
     for (let offset = buffer.length - 22; offset >= 0 && offset >= buffer.length - 0xFFFF - 22; offset--) {
-        if (buffer.readUInt32LE(offset) === ZIP_EOCD_MAGIC) {
-            eocdOffset = offset;
-            break;
-        }
+        if (buffer.readUInt32LE(offset) === ZIP_EOCD_MAGIC) { eocdOffset = offset; break; }
     }
-
     if (eocdOffset < 0) return null;
-
     const centralDirectorySize = buffer.readUInt32LE(eocdOffset + 12);
     const centralDirectoryOffset = buffer.readUInt32LE(eocdOffset + 16);
     let cursor = centralDirectoryOffset;
     const end = centralDirectoryOffset + centralDirectorySize;
-
     while (cursor + 46 <= end && cursor + 46 <= buffer.length) {
         if (buffer.readUInt32LE(cursor) !== ZIP_CENTRAL_MAGIC) break;
-
         const compressionMethod = buffer.readUInt16LE(cursor + 10);
         const compressedSize = buffer.readUInt32LE(cursor + 20);
         const uncompressedSize = buffer.readUInt32LE(cursor + 24);
@@ -268,94 +240,52 @@ function extractUserdataFromZip(buffer) {
         const commentLength = buffer.readUInt16LE(cursor + 32);
         const localHeaderOffset = buffer.readUInt32LE(cursor + 42);
         const fileName = buffer.toString('utf8', cursor + 46, cursor + 46 + fileNameLength);
-
         if (fileName.replace(/\\/g, '/').endsWith('/USERDATA') || fileName === 'USERDATA') {
-            if (buffer.readUInt32LE(localHeaderOffset) !== ZIP_LOCAL_MAGIC) {
-                throw new Error('ZIP USERDATA local header is invalid.');
-            }
-
+            if (buffer.readUInt32LE(localHeaderOffset) !== ZIP_LOCAL_MAGIC) throw new Error('ZIP USERDATA local header is invalid.');
             const localNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
             const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
             const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
             const compressed = buffer.slice(dataOffset, dataOffset + compressedSize);
-
             if (compressionMethod === 0) return compressed;
             if (compressionMethod === 8) return zlib.inflateRawSync(compressed, { finishFlush: zlib.constants.Z_SYNC_FLUSH }).slice(0, uncompressedSize);
-
             throw new Error(`Unsupported ZIP compression method for USERDATA: ${compressionMethod}`);
         }
-
         cursor += 46 + fileNameLength + extraLength + commentLength;
     }
-
     return null;
 }
 
 async function extractRostFromIff(buffer) {
     const parser = new IFFReader();
     const files = [];
-
-    parser.on('file-data', (file) => {
-        files.push(file);
-    });
-
+    parser.on('file-data', (file) => { files.push(file); });
     await pipeline(Readable.from(buffer), parser);
-
-    const rosterFile = files.find((file) => {
-        return file.type === IFFType.TYPES.ROST
-            || String(file.name || '').toLowerCase() === 'roster';
-    }) || files[0];
-
-    if (!rosterFile) {
-        throw new Error('No subfile found inside ROST IFF.');
-    }
-
+    const rosterFile = files.find((file) => file.type === IFFType.TYPES.ROST || String(file.name || '').toLowerCase() === 'roster') || files[0];
+    if (!rosterFile) throw new Error('No subfile found inside ROST IFF.');
     return Buffer.concat(rosterFile.dataBlocks.map((block) => block.data || Buffer.alloc(0)));
 }
 
 async function loadRosterPayload(inputPath) {
     let buffer = await fs.readFile(inputPath);
-
     if (buffer.length >= 4 && buffer.readUInt32LE(0) === ZIP_LOCAL_MAGIC) {
         const userdata = extractUserdataFromZip(buffer);
         if (!userdata) throw new Error('ZIP input did not contain USERDATA.');
         buffer = userdata;
     }
-
-    if (buffer.length >= 4 && u32(buffer, 0) + 4 === buffer.length) {
-        return {
-            sourceType: 'decrypted-save-userdata',
-            payload: buffer.slice(4),
-            lengthPrefix: u32(buffer, 0)
-        };
-    }
-
-    if (buffer.length >= 4 && u32(buffer, 0) === STANDARD_IFF_MAGIC) {
-        return {
-            sourceType: 'standard-iff-roster',
-            payload: await extractRostFromIff(buffer),
-            lengthPrefix: null
-        };
-    }
-
-    return {
-        sourceType: 'raw-rost-payload',
-        payload: buffer,
-        lengthPrefix: null
-    };
+    if (buffer.length >= 4 && u32(buffer, 0) + 4 === buffer.length) return { sourceType: 'decrypted-save-userdata', payload: buffer.slice(4), lengthPrefix: u32(buffer, 0) };
+    if (buffer.length >= 4 && u32(buffer, 0) === STANDARD_IFF_MAGIC) return { sourceType: 'standard-iff-roster', payload: await extractRostFromIff(buffer), lengthPrefix: null };
+    return { sourceType: 'raw-rost-payload', payload: buffer, lengthPrefix: null };
 }
 
 async function decodeRoster(inputPath, outputPath) {
     await mkdir(outputPath);
     const loaded = await loadRosterPayload(inputPath);
     const decoded = decodeRosterPayload(loaded.payload);
-
     await writeCsv(path.join(outputPath, 'players.csv'), decoded.players);
     await writeCsv(path.join(outputPath, 'teams.csv'), decoded.teams);
     await writeCsv(path.join(outputPath, 'roster_slots.csv'), decoded.rosterSlots);
     await writeCsv(path.join(outputPath, 'arenas.csv'), decoded.arenas);
     await writeCsv(path.join(outputPath, 'coaches.csv'), decoded.coaches);
-
     const summary = {
         inputPath,
         sourceType: loaded.sourceType,
@@ -366,20 +296,18 @@ async function decodeRoster(inputPath, outputPath) {
         arenas: decoded.arenas.length,
         coaches: decoded.coaches.length,
         rosterSlots: decoded.rosterSlots.length,
-        note: 'String edits longer than the original string require future string-heap rebuild support.'
+        teamPaletteSlotsPerTeam: TEAM_PALETTE_COUNT,
+        note: 'String edits longer than the original string require future string-heap rebuild support. Team palette columns are exported explicitly as palette_XX_hex values from +0x1A0..+0x218.'
     };
-
     await fs.writeFile(path.join(outputPath, 'roster_summary.json'), JSON.stringify(summary, null, 2));
     return summary;
 }
 
 function compareRowsByIndex(aRows, bRows, fields, indexField) {
     const diffs = [];
-
     for (let i = 0; i < Math.min(aRows.length, bRows.length); i++) {
         const changedFields = fields.filter((field) => aRows[i][field] !== bRows[i][field]);
         if (changedFields.length <= 0) continue;
-
         const row = { [indexField]: aRows[i][indexField] };
         for (const field of fields) {
             row[`vanilla_${field}`] = aRows[i][field];
@@ -388,35 +316,19 @@ function compareRowsByIndex(aRows, bRows, fields, indexField) {
         row.changed_fields = changedFields.join(';');
         diffs.push(row);
     }
-
     return diffs;
 }
 
 async function compareRosters(basePath, customPath, outputPath) {
     await mkdir(outputPath);
-
     const baseLoaded = await loadRosterPayload(basePath);
     const customLoaded = await loadRosterPayload(customPath);
     const base = decodeRosterPayload(baseLoaded.payload);
     const custom = decodeRosterPayload(customLoaded.payload);
-
-    const playerDiffs = compareRowsByIndex(
-        base.players,
-        custom.players,
-        ['display_name', 'first_name', 'last_name', 'jersey_number', 'height_inches', 'position'],
-        'player_index'
-    );
-
-    const teamDiffs = compareRowsByIndex(
-        base.teams,
-        custom.teams,
-        ['short_name', 'abbreviation', 'school_name', 'mascot_plural', 'mascot_name', 'asset_id', 'team_index_check'],
-        'team_index'
-    );
-
+    const playerDiffs = compareRowsByIndex(base.players, custom.players, ['display_name', 'first_name', 'last_name', 'jersey_number', 'height_inches', 'position'], 'player_index');
+    const teamDiffs = compareRowsByIndex(base.teams, custom.teams, ['short_name', 'abbreviation', 'school_name', 'mascot_plural', 'mascot_name', 'asset_id', 'team_index_check'], 'team_index');
     await writeCsv(path.join(outputPath, 'player_diffs.csv'), playerDiffs);
     await writeCsv(path.join(outputPath, 'team_diffs.csv'), teamDiffs);
-
     const summary = {
         basePath,
         customPath,
@@ -428,14 +340,8 @@ async function compareRosters(basePath, customPath, outputPath) {
         playersChanged: playerDiffs.length,
         teamsChanged: teamDiffs.length
     };
-
     await fs.writeFile(path.join(outputPath, 'roster_compare_summary.json'), JSON.stringify(summary, null, 2));
     return summary;
 }
 
-module.exports = {
-    loadRosterPayload,
-    decodeRosterPayload,
-    decodeRoster,
-    compareRosters
-};
+module.exports = { loadRosterPayload, decodeRosterPayload, decodeRoster, compareRosters };
