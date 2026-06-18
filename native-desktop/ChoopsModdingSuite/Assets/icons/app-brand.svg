@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="College Hoops Reborn app icon">
+  <defs>
+    <linearGradient id="navy" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#061b2f"/><stop offset="1" stop-color="#08385e"/></linearGradient>
+    <linearGradient id="ice" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f8fdff"/><stop offset="1" stop-color="#60d2ff"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f8d575"/><stop offset="1" stop-color="#c28a16"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect x="15" y="15" width="226" height="226" rx="33" fill="url(#navy)" stroke="url(#gold)" stroke-width="9"/>
+  <rect x="32" y="32" width="192" height="192" rx="24" fill="none" stroke="#60d2ff" stroke-width="6" filter="url(#glow)"/>
+  <path d="M42 77C74 49 111 39 154 43M72 38C100 74 135 84 205 67M49 105C99 80 153 82 215 107" fill="none" stroke="url(#ice)" stroke-width="8" stroke-linecap="round" opacity=".95"/>
+  <rect x="30" y="104" width="196" height="60" rx="12" fill="#06111f" stroke="#60d2ff" stroke-width="4"/>
+  <text x="52" y="146" font-family="Segoe UI Black, Arial Black, sans-serif" font-size="42" font-weight="900" fill="url(#ice)" letter-spacing="-3">CHRB</text>
+  <text x="166" y="146" font-family="Segoe UI Black, Arial Black, sans-serif" font-size="42" font-weight="900" fill="url(#gold)" letter-spacing="-2">2K</text>
+  <text x="128" y="184" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="800" fill="#f8fdff" letter-spacing="6">REBORN</text>
+  <path d="M95 208l10 9 13-19 13 19 10-9-11 23h-24z" fill="#60d2ff" stroke="#f8fdff" stroke-width="2"/>
+</svg>
