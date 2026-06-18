@@ -85,7 +85,11 @@ typings/
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+
+# Project build outputs. Keep generated EXEs out of GitHub.
+release/
+dist/
+dist-native/
 
 # Gatsby files
 .cache/
